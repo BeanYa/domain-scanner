@@ -1,2 +1,94 @@
+use crate::scanner::list_generator::ListGenerator;
+use crate::models::task::ScanMode;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Deserialize)]
+pub struct ScanPreviewRequest {
+    pub scan_mode: ScanMode,
+    pub tld: String,
+    pub sample_count: Option<usize>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ScanPreviewResponse {
+    pub tld: String,
+    pub total_count: i64,
+    pub sample_domains: Vec<String>,
+}
+
 #[tauri::command]
-pub fn scan_preview() -> Result<String, String> { Ok("{}".to_string()) }
+pub fn scan_preview(request: ScanPreviewRequest) -> Result<String, String> {
+    match &request.scan_mode {
+        ScanMode::Manual { domains } => {
+            let count = domains.len() as i64;
+            let samples: Vec<String> = domains.iter()
+                .take(request.sample_count.unwrap_or(10))
+                .map(|d| format!("{}{}", d, request.tld))
+                .collect();
+            let response = ScanPreviewResponse {
+                tld: request.tld,
+                total_count: count,
+                sample_domains: samples,
+            };
+            return serde_json::to_string(&response).map_err(|e| e.to_string());
+        }
+        ScanMode::Regex { pattern } | ScanMode::Wildcard { pattern } => {
+            let mut gen = ListGenerator::new(request.scan_mode.clone(), request.tld.clone())
+                .with_batch_size(request.sample_count.unwrap_or(10));
+
+            let total_count = gen.total_count();
+            let batch = gen.next_batch();
+            let sample_domains: Vec<String> = batch.iter()
+                .take(request.sample_count.unwrap_or(10))
+                .map(|item| item.domain.clone())
+                .collect();
+
+            let response = ScanPreviewResponse {
+                tld: request.tld,
+                total_count,
+                sample_domains,
+            };
+            serde_json::to_string(&response).map_err(|e| e.to_string())
+        }
+        ScanMode::Llm { .. } => {
+            let response = ScanPreviewResponse {
+                tld: request.tld,
+                total_count: 0, // LLM generates candidates dynamically
+                sample_domains: vec![],
+            };
+            serde_json::to_string(&response).map_err(|e| e.to_string())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_scan_preview_regex() {
+        let req = ScanPreviewRequest {
+            scan_mode: ScanMode::Regex { pattern: "^[a-z]{2}$".to_string() },
+            tld: ".com".to_string(),
+            sample_count: Some(5),
+        };
+        let result = scan_preview(req).unwrap();
+        let response: ScanPreviewResponse = serde_json::from_str(&result).unwrap();
+        assert_eq!(response.tld, ".com");
+        assert_eq!(response.total_count, 676); // 26^2
+        assert!(!response.sample_domains.is_empty());
+    }
+
+    #[test]
+    fn test_scan_preview_manual() {
+        let req = ScanPreviewRequest {
+            scan_mode: ScanMode::Manual { domains: vec!["test".to_string(), "demo".to_string()] },
+            tld: ".com".to_string(),
+            sample_count: Some(10),
+        };
+        let result = scan_preview(req).unwrap();
+        let response: ScanPreviewResponse = serde_json::from_str(&result).unwrap();
+        assert_eq!(response.total_count, 2);
+        assert!(response.sample_domains.contains(&"test.com".to_string()));
+    }
+}

@@ -19,6 +19,16 @@ pub struct ProxyConfig {
     pub is_active: bool,
 }
 
+impl ProxyType {
+    pub fn to_url_scheme(&self) -> &str {
+        match self {
+            ProxyType::Http => "http",
+            ProxyType::Https => "https",
+            ProxyType::Socks5 => "socks5",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
