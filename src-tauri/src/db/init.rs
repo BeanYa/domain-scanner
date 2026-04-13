@@ -1,7 +1,24 @@
 use rusqlite::Connection;
 
-/// Initialize all database tables and indexes
-pub fn init_database(conn: &Connection) -> Result<(), rusqlite::Error> {
+/// Register the sqlite-vec extension for all new connections
+pub fn register_vec_extension() {
+    unsafe {
+        rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute::<
+            unsafe extern "C" fn(),
+            unsafe extern "C" fn(
+                *mut rusqlite::ffi::sqlite3,
+                *mut *const std::ffi::c_char,
+                *const rusqlite::ffi::sqlite3_api_routines,
+            ) -> i32,
+        >(sqlite_vec::sqlite3_vec_init)));
+    }
+}
+
+/// Initialize all database tables, indexes, and extensions
+pub fn init_database(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    // Create the vec0 virtual table for domain embeddings
+    conn.execute_batch("CREATE VIRTUAL TABLE IF NOT EXISTS domain_vectors USING vec0(domain_id INTEGER PRIMARY KEY, domain_embedding float[384]);")?;
+
     conn.execute_batch("PRAGMA journal_mode=WAL;")?;
     conn.execute_batch("PRAGMA foreign_keys=ON;")?;
 
@@ -100,6 +117,7 @@ pub fn init_database(conn: &Connection) -> Result<(), rusqlite::Error> {
             score REAL,
             embedding_id INTEGER
         );
+        CREATE INDEX IF NOT EXISTS idx_filtered_results_task ON filtered_results(task_id);
         "
     )?;
 
@@ -112,12 +130,21 @@ pub fn init_database(conn: &Connection) -> Result<(), rusqlite::Error> {
     Ok(())
 }
 
+/// Open a database connection and initialize schema
+pub fn open_and_init(path: &str) -> Result<Connection, Box<dyn std::error::Error>> {
+    register_vec_extension();
+    let conn = Connection::open(path)?;
+    init_database(&conn)?;
+    Ok(conn)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::NamedTempFile;
 
-    fn setup_test_db() -> (Connection, NamedTempFile) {
+    pub fn setup_test_db() -> (Connection, NamedTempFile) {
+        register_vec_extension();
         let temp_file = NamedTempFile::new().unwrap();
         let conn = Connection::open(temp_file.path()).unwrap();
         init_database(&conn).unwrap();
@@ -128,7 +155,6 @@ mod tests {
     fn test_init_database_creates_tables() {
         let (conn, _temp) = setup_test_db();
 
-        // Verify tables exist
         let tables: Vec<String> = conn
             .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
             .unwrap()
@@ -145,6 +171,7 @@ mod tests {
         assert!(tables.contains(&"llm_configs".to_string()));
         assert!(tables.contains(&"gpu_configs".to_string()));
         assert!(tables.contains(&"filtered_results".to_string()));
+        assert!(tables.contains(&"domain_vectors".to_string()));
     }
 
     #[test]
@@ -163,6 +190,8 @@ mod tests {
         assert!(indexes.contains(&"idx_tasks_batch".to_string()));
         assert!(indexes.contains(&"idx_tasks_status".to_string()));
         assert!(indexes.contains(&"idx_scan_items_task_status".to_string()));
+        assert!(indexes.contains(&"idx_task_logs_task".to_string()));
+        assert!(indexes.contains(&"idx_filtered_results_task".to_string()));
     }
 
     #[test]
@@ -187,5 +216,29 @@ mod tests {
             )
             .unwrap();
         assert_eq!(backend, "auto");
+    }
+
+    #[test]
+    fn test_domain_vectors_virtual_table_exists() {
+        let (conn, _temp) = setup_test_db();
+
+        let tables: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='domain_vectors'")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(tables.contains(&"domain_vectors".to_string()));
+    }
+
+    #[test]
+    fn test_idempotent_init() {
+        register_vec_extension();
+        let temp_file = NamedTempFile::new().unwrap();
+        let conn = Connection::open(temp_file.path()).unwrap();
+        init_database(&conn).unwrap();
+        // Second init should not fail
+        init_database(&conn).unwrap();
     }
 }

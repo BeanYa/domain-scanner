@@ -1,7 +1,4 @@
-// Task repository - CRUD + signature dedup + progress update
-// TDD: will be implemented with unit tests first
-
-use crate::models::task::{Task, TaskStatus, BatchCreateResult};
+use crate::models::task::{BatchCreateResult, ScanMode, Task, TaskStatus};
 
 pub struct TaskRepo<'a> {
     pub conn: &'a rusqlite::Connection,
@@ -30,8 +27,14 @@ impl<'a> TaskRepo<'a> {
     }
 
     pub fn get_by_id(&self, id: &str) -> Result<Option<Task>, rusqlite::Error> {
-        // TODO: implement
-        Ok(None)
+        let mut stmt = self.conn.prepare(
+            "SELECT id, batch_id, name, signature, status, scan_mode, config_json, tld, prefix_pattern, total_count, completed_count, completed_index, available_count, error_count, created_at, updated_at FROM tasks WHERE id = ?1"
+        )?;
+        let mut rows = stmt.query([id])?;
+        match rows.next()? {
+            Some(row) => Ok(Some(self.row_to_task(row)?)),
+            None => Ok(None),
+        }
     }
 
     pub fn signature_exists(&self, signature: &str) -> Result<bool, rusqlite::Error> {
@@ -52,12 +55,123 @@ impl<'a> TaskRepo<'a> {
         Ok(())
     }
 
-    pub fn update_progress(&self, id: &str, completed_count: i64, completed_index: i64, available_count: i64, error_count: i64) -> Result<(), rusqlite::Error> {
+    pub fn update_progress(
+        &self,
+        id: &str,
+        completed_count: i64,
+        completed_index: i64,
+        available_count: i64,
+        error_count: i64,
+    ) -> Result<(), rusqlite::Error> {
         self.conn.execute(
             "UPDATE tasks SET completed_count = ?1, completed_index = ?2, available_count = ?3, error_count = ?4, updated_at = CURRENT_TIMESTAMP WHERE id = ?5",
             rusqlite::params![completed_count, completed_index, available_count, error_count, id],
         )?;
         Ok(())
+    }
+
+    /// List tasks with optional status filter and pagination
+    pub fn list(
+        &self,
+        status: Option<&TaskStatus>,
+        batch_id: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Task>, rusqlite::Error> {
+        let mut sql = String::from(
+            "SELECT id, batch_id, name, signature, status, scan_mode, config_json, tld, prefix_pattern, total_count, completed_count, completed_index, available_count, error_count, created_at, updated_at FROM tasks WHERE 1=1"
+        );
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(s) = status {
+            sql.push_str(" AND status = ?");
+            param_values.push(Box::new(serde_json::to_string(s).unwrap()));
+        }
+        if let Some(bid) = batch_id {
+            sql.push_str(" AND batch_id = ?");
+            param_values.push(Box::new(bid.to_string()));
+        }
+        sql.push_str(" ORDER BY created_at DESC LIMIT ? OFFSET ?");
+        param_values.push(Box::new(limit));
+        param_values.push(Box::new(offset));
+
+        let params: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = self.conn.prepare(&sql)?;
+        let tasks = stmt
+            .query_map(params.as_slice(), |row| self.row_to_task(row))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(tasks)
+    }
+
+    /// Count tasks with optional status filter
+    pub fn count(&self, status: Option<&TaskStatus>) -> Result<i64, rusqlite::Error> {
+        match status {
+            Some(s) => {
+                let status_str = serde_json::to_string(s).unwrap();
+                self.conn.query_row(
+                    "SELECT COUNT(*) FROM tasks WHERE status = ?1",
+                    rusqlite::params![status_str],
+                    |row| row.get(0),
+                )
+            }
+            None => {
+                self.conn.query_row("SELECT COUNT(*) FROM tasks", [], |row| row.get(0))
+            }
+        }
+    }
+
+    /// Delete a task by ID
+    pub fn delete(&self, id: &str) -> Result<(), rusqlite::Error> {
+        self.conn.execute("DELETE FROM tasks WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    /// Batch create tasks with signature dedup
+    pub fn batch_create(&self, tasks: Vec<Task>) -> Result<BatchCreateResult, rusqlite::Error> {
+        let mut created = 0u32;
+        let mut skipped = 0u32;
+        let mut task_ids = Vec::new();
+        let mut skipped_tlds = Vec::new();
+
+        for task in &tasks {
+            if self.signature_exists(&task.signature)? {
+                skipped += 1;
+                skipped_tlds.push(task.tld.clone());
+            } else {
+                self.create(task)?;
+                created += 1;
+                task_ids.push(task.id.clone());
+            }
+        }
+
+        Ok(BatchCreateResult {
+            created,
+            skipped,
+            task_ids,
+            skipped_tlds,
+        })
+    }
+
+    fn row_to_task(&self, row: &rusqlite::Row) -> Result<Task, rusqlite::Error> {
+        Ok(Task {
+            id: row.get(0)?,
+            batch_id: row.get(1)?,
+            name: row.get(2)?,
+            signature: row.get(3)?,
+            status: serde_json::from_str(&row.get::<_, String>(4)?).unwrap_or(TaskStatus::Pending),
+            scan_mode: serde_json::from_str(&row.get::<_, String>(5)?).unwrap_or(ScanMode::Regex { pattern: String::new() }),
+            config_json: row.get(6)?,
+            tld: row.get(7)?,
+            prefix_pattern: row.get(8)?,
+            total_count: row.get(9)?,
+            completed_count: row.get(10)?,
+            completed_index: row.get(11)?,
+            available_count: row.get(12)?,
+            error_count: row.get(13)?,
+            created_at: row.get(14)?,
+            updated_at: row.get(15)?,
+        })
     }
 }
 
@@ -65,10 +179,10 @@ impl<'a> TaskRepo<'a> {
 mod tests {
     use super::*;
     use crate::db::init;
-    use crate::models::task::ScanMode;
     use tempfile::NamedTempFile;
 
     fn setup() -> (rusqlite::Connection, NamedTempFile) {
+        crate::db::init::register_vec_extension();
         let temp = NamedTempFile::new().unwrap();
         let conn = rusqlite::Connection::open(temp.path()).unwrap();
         init::init_database(&conn).unwrap();
@@ -102,7 +216,17 @@ mod tests {
         let repo = TaskRepo::new(&conn);
         let task = make_test_task("t1", "sig1", ".com");
         repo.create(&task).unwrap();
-        assert!(repo.signature_exists("sig1").unwrap());
+        let fetched = repo.get_by_id("t1").unwrap().unwrap();
+        assert_eq!(fetched.id, "t1");
+        assert_eq!(fetched.tld, ".com");
+        assert_eq!(fetched.signature, "sig1");
+    }
+
+    #[test]
+    fn test_get_nonexistent_task() {
+        let (conn, _temp) = setup();
+        let repo = TaskRepo::new(&conn);
+        assert!(repo.get_by_id("nonexistent").unwrap().is_none());
     }
 
     #[test]
@@ -117,10 +241,13 @@ mod tests {
     }
 
     #[test]
-    fn test_signature_not_exists() {
+    fn test_signature_exists_and_not_exists() {
         let (conn, _temp) = setup();
         let repo = TaskRepo::new(&conn);
-        assert!(!repo.signature_exists("nonexistent").unwrap());
+        assert!(!repo.signature_exists("sig1").unwrap());
+        let task = make_test_task("t1", "sig1", ".com");
+        repo.create(&task).unwrap();
+        assert!(repo.signature_exists("sig1").unwrap());
     }
 
     #[test]
@@ -130,7 +257,8 @@ mod tests {
         let task = make_test_task("t1", "sig1", ".com");
         repo.create(&task).unwrap();
         repo.update_status("t1", &TaskStatus::Running).unwrap();
-        assert!(repo.signature_exists("sig1").unwrap());
+        let fetched = repo.get_by_id("t1").unwrap().unwrap();
+        assert_eq!(fetched.status, TaskStatus::Running);
     }
 
     #[test]
@@ -140,5 +268,108 @@ mod tests {
         let task = make_test_task("t1", "sig1", ".com");
         repo.create(&task).unwrap();
         repo.update_progress("t1", 100, 100, 30, 2).unwrap();
+        let fetched = repo.get_by_id("t1").unwrap().unwrap();
+        assert_eq!(fetched.completed_count, 100);
+        assert_eq!(fetched.completed_index, 100);
+        assert_eq!(fetched.available_count, 30);
+        assert_eq!(fetched.error_count, 2);
+    }
+
+    #[test]
+    fn test_list_all_tasks() {
+        let (conn, _temp) = setup();
+        let repo = TaskRepo::new(&conn);
+        repo.create(&make_test_task("t1", "sig1", ".com")).unwrap();
+        repo.create(&make_test_task("t2", "sig2", ".net")).unwrap();
+        let tasks = repo.list(None, None, 100, 0).unwrap();
+        assert_eq!(tasks.len(), 2);
+    }
+
+    #[test]
+    fn test_list_tasks_by_status() {
+        let (conn, _temp) = setup();
+        let repo = TaskRepo::new(&conn);
+        repo.create(&make_test_task("t1", "sig1", ".com")).unwrap();
+        let mut task2 = make_test_task("t2", "sig2", ".net");
+        task2.status = TaskStatus::Running;
+        repo.create(&task2).unwrap();
+        let running = repo.list(Some(&TaskStatus::Running), None, 100, 0).unwrap();
+        assert_eq!(running.len(), 1);
+        assert_eq!(running[0].id, "t2");
+    }
+
+    #[test]
+    fn test_list_tasks_by_batch() {
+        let (conn, _temp) = setup();
+        // Create the batch first to satisfy foreign key constraint
+        conn.execute(
+            "INSERT INTO task_batches (id, name, task_count) VALUES ('batch1', 'Test Batch', 1)",
+            [],
+        ).unwrap();
+        let repo = TaskRepo::new(&conn);
+        let mut t1 = make_test_task("t1", "sig1", ".com");
+        t1.batch_id = Some("batch1".to_string());
+        repo.create(&t1).unwrap();
+        repo.create(&make_test_task("t2", "sig2", ".net")).unwrap();
+        let batch_tasks = repo.list(None, Some("batch1"), 100, 0).unwrap();
+        assert_eq!(batch_tasks.len(), 1);
+        assert_eq!(batch_tasks[0].batch_id, Some("batch1".to_string()));
+    }
+
+    #[test]
+    fn test_list_tasks_pagination() {
+        let (conn, _temp) = setup();
+        let repo = TaskRepo::new(&conn);
+        for i in 0..5 {
+            repo.create(&make_test_task(&format!("t{i}"), &format!("sig{i}"), ".com")).unwrap();
+        }
+        let page1 = repo.list(None, None, 2, 0).unwrap();
+        let page2 = repo.list(None, None, 2, 2).unwrap();
+        assert_eq!(page1.len(), 2);
+        assert_eq!(page2.len(), 2);
+    }
+
+    #[test]
+    fn test_count_tasks() {
+        let (conn, _temp) = setup();
+        let repo = TaskRepo::new(&conn);
+        assert_eq!(repo.count(None).unwrap(), 0);
+        repo.create(&make_test_task("t1", "sig1", ".com")).unwrap();
+        repo.create(&make_test_task("t2", "sig2", ".net")).unwrap();
+        assert_eq!(repo.count(None).unwrap(), 2);
+        assert_eq!(repo.count(Some(&TaskStatus::Pending)).unwrap(), 2);
+    }
+
+    #[test]
+    fn test_delete_task() {
+        let (conn, _temp) = setup();
+        let repo = TaskRepo::new(&conn);
+        repo.create(&make_test_task("t1", "sig1", ".com")).unwrap();
+        repo.delete("t1").unwrap();
+        assert!(repo.get_by_id("t1").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_batch_create_with_dedup() {
+        let (conn, _temp) = setup();
+        let repo = TaskRepo::new(&conn);
+        let tasks = vec![
+            make_test_task("t1", "sig1", ".com"),
+            make_test_task("t2", "sig2", ".net"),
+        ];
+        let result = repo.batch_create(tasks).unwrap();
+        assert_eq!(result.created, 2);
+        assert_eq!(result.skipped, 0);
+        assert_eq!(result.task_ids.len(), 2);
+
+        // Try creating again with same signatures
+        let tasks2 = vec![
+            make_test_task("t3", "sig1", ".com"),
+            make_test_task("t4", "sig3", ".org"),
+        ];
+        let result2 = repo.batch_create(tasks2).unwrap();
+        assert_eq!(result2.created, 1);
+        assert_eq!(result2.skipped, 1);
+        assert!(result2.skipped_tlds.contains(&".com".to_string()));
     }
 }

@@ -20,6 +20,7 @@ serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", features = ["json", "socks"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
+sqlite-vec = "0.1"
 hickory-resolver = "0.24"
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
