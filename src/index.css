@@ -1,0 +1,69 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    @apply border-cyber-border;
+  }
+
+  body {
+    @apply bg-cyber-bg text-cyber-text;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-cyber-bg;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-cyber-border rounded-full;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-cyber-muted;
+  }
+}
+
+@layer components {
+  .glass-panel {
+    @apply bg-cyber-card/60 backdrop-blur-md border border-cyber-border/50 rounded-xl;
+  }
+
+  .neon-text {
+    @apply text-transparent bg-clip-text bg-gradient-to-r from-cyber-green to-cyber-cyan;
+  }
+
+  .neon-border {
+    @apply border border-cyber-green/30 shadow-neon;
+  }
+
+  .cyber-input {
+    @apply bg-cyber-surface border border-cyber-border rounded-lg px-3 py-2 text-cyber-text
+           placeholder:text-cyber-muted focus:outline-none focus:border-cyber-green/50
+           focus:shadow-neon transition-all duration-200;
+  }
+
+  .cyber-btn {
+    @apply px-4 py-2 rounded-lg font-medium transition-all duration-200
+           focus:outline-none focus:ring-2 focus:ring-cyber-green/50 cursor-pointer;
+  }
+
+  .cyber-btn-primary {
+    @apply cyber-btn bg-gradient-to-r from-cyber-green to-cyber-cyan text-cyber-bg
+           hover:shadow-neon hover:scale-[1.02] active:scale-[0.98];
+  }
+
+  .cyber-btn-secondary {
+    @apply cyber-btn bg-cyber-surface border border-cyber-border text-cyber-text
+           hover:bg-cyber-card hover:border-cyber-green/30;
+  }
+
+  .cyber-btn-danger {
+    @apply cyber-btn bg-cyber-red/10 border border-cyber-red/30 text-cyber-red
+           hover:bg-cyber-red/20 hover:border-cyber-red/50;
+  }
+}
