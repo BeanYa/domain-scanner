@@ -1,11 +1,11 @@
-mod models;
-mod db;
-mod scanner;
-mod llm;
-mod embedding;
-mod proxy;
-mod export;
-mod commands;
+pub mod models;
+pub mod db;
+pub mod scanner;
+pub mod llm;
+pub mod embedding;
+pub mod proxy;
+pub mod export;
+pub mod commands;
 
 use commands::*;
 
