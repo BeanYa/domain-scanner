@@ -11,6 +11,7 @@ pub struct CreateTasksRequest {
     pub name: String,
     pub scan_mode: ScanMode,
     pub tlds: Vec<String>,
+    /// Optional: group multiple tasks into a batch (only needed when creating different scan modes)
     pub batch_name: Option<String>,
 }
 
@@ -20,96 +21,77 @@ pub struct CreateTasksResponse {
     pub created: u32,
     pub skipped: u32,
     pub task_ids: Vec<String>,
-    pub skipped_tlds: Vec<String>,
+    pub skipped_signatures: Vec<String>,
 }
 
 #[tauri::command]
 pub fn create_tasks(request: CreateTasksRequest) -> Result<CreateTasksResponse, String> {
     let conn = init::open_and_init(":memory:").map_err(|e| e.to_string())?;
 
-    // Create batch if multiple TLDs
-    let batch_id = if request.tlds.len() > 1 {
-        let id = Uuid::new_v4().to_string();
-        let batch_name = request.batch_name.clone()
-            .unwrap_or_else(|| format!("Batch {}", &id[..8]));
-        let batch = crate::models::task::TaskBatch {
-            id: id.clone(),
-            name: batch_name,
-            task_count: request.tlds.len() as i64,
-            created_at: chrono::Utc::now().to_rfc3339(),
-        };
-        let batch_repo = BatchRepo::new(&conn);
-        batch_repo.create(&batch).map_err(|e| e.to_string())?;
-        Some(id)
-    } else {
-        None
+    let task_repo = TaskRepo::new(&conn);
+
+    // Generate signature for this (mode + tlds) combination
+    let signature = generate_signature(&request.scan_mode, &request.tlds);
+
+    // Check for duplicate signature
+    if task_repo.signature_exists(&signature).map_err(|e| e.to_string())? {
+        return Ok(CreateTasksResponse {
+            batch_id: None,
+            created: 0,
+            skipped: 1,
+            task_ids: vec![],
+            skipped_signatures: vec![signature],
+        });
+    }
+
+    // Calculate total count
+    let total_count = match &request.scan_mode {
+        ScanMode::Manual { domains } => domains.len() as i64 * request.tlds.len() as i64,
+        _ => 0, // Will be estimated later by the scanner engine
     };
 
-    let task_repo = TaskRepo::new(&conn);
-    let mut created = 0u32;
-    let mut skipped = 0u32;
-    let mut task_ids = Vec::new();
-    let mut skipped_tlds = Vec::new();
+    // Create a single task with all TLDs
+    let task_id = Uuid::new_v4().to_string();
+    let prefix_pattern = match &request.scan_mode {
+        ScanMode::Regex { pattern } => Some(pattern.clone()),
+        ScanMode::Wildcard { pattern } => Some(pattern.clone()),
+        ScanMode::Llm { prompt, .. } => Some(prompt.clone()),
+        ScanMode::Manual { domains } => Some(domains.join(",")),
+    };
 
-    for tld in &request.tlds {
-        let signature = generate_signature(&request.scan_mode, tld);
+    let display_name = if request.tlds.len() == 1 {
+        format!("{} - {}", request.name, &request.tlds[0])
+    } else {
+        format!("{} [{} TLDs]", request.name, request.tlds.len())
+    };
 
-        // Check for duplicate signature
-        if task_repo.signature_exists(&signature).map_err(|e| e.to_string())? {
-            skipped += 1;
-            skipped_tlds.push(tld.clone());
-            continue;
-        }
+    let task = Task {
+        id: task_id.clone(),
+        batch_id: None,
+        name: display_name,
+        signature,
+        status: TaskStatus::Pending,
+        scan_mode: request.scan_mode.clone(),
+        config_json: serde_json::to_string(&request.scan_mode).unwrap_or_default(),
+        tlds: request.tlds,
+        prefix_pattern,
+        total_count,
+        completed_count: 0,
+        completed_index: 0,
+        available_count: 0,
+        error_count: 0,
+        created_at: chrono::Utc::now().to_rfc3339(),
+        updated_at: chrono::Utc::now().to_rfc3339(),
+    };
 
-        let task_id = Uuid::new_v4().to_string();
-        let prefix_pattern = match &request.scan_mode {
-            ScanMode::Regex { pattern } => Some(pattern.clone()),
-            ScanMode::Wildcard { pattern } => Some(pattern.clone()),
-            ScanMode::Llm { prompt, .. } => Some(prompt.clone()),
-            ScanMode::Manual { domains } => Some(domains.join(",")),
-        };
-
-        let total_count = match &request.scan_mode {
-            ScanMode::Manual { domains } => domains.len() as i64,
-            _ => 0, // Will be estimated later
-        };
-
-        let task = Task {
-            id: task_id.clone(),
-            batch_id: batch_id.clone(),
-            name: format!("{} - {}", request.name, tld),
-            signature,
-            status: TaskStatus::Pending,
-            scan_mode: request.scan_mode.clone(),
-            config_json: serde_json::to_string(&request.scan_mode).unwrap_or_default(),
-            tld: tld.clone(),
-            prefix_pattern,
-            total_count,
-            completed_count: 0,
-            completed_index: 0,
-            available_count: 0,
-            error_count: 0,
-            created_at: chrono::Utc::now().to_rfc3339(),
-            updated_at: chrono::Utc::now().to_rfc3339(),
-        };
-
-        task_repo.create(&task).map_err(|e| e.to_string())?;
-        task_ids.push(task_id);
-        created += 1;
-    }
-
-    // Update batch task count
-    if let Some(ref bid) = batch_id {
-        let batch_repo = BatchRepo::new(&conn);
-        batch_repo.update_task_count(bid, created as i64).map_err(|e| e.to_string())?;
-    }
+    task_repo.create(&task).map_err(|e| e.to_string())?;
 
     Ok(CreateTasksResponse {
-        batch_id,
-        created,
-        skipped,
-        task_ids,
-        skipped_tlds,
+        batch_id: None,
+        created: 1,
+        skipped: 0,
+        task_ids: vec![task_id],
+        skipped_signatures: vec![],
     })
 }
 
@@ -210,37 +192,76 @@ pub fn get_task_detail(task_id: String) -> Result<String, String> {
 mod tests {
     use super::*;
 
-    fn make_test_request(tlds: Vec<&str>) -> CreateTasksRequest {
-        CreateTasksRequest {
+    #[test]
+    fn test_create_task_single_tld() {
+        let req = CreateTasksRequest {
             name: "Test Task".to_string(),
             scan_mode: ScanMode::Regex { pattern: "^[a-z]{3}$".to_string() },
-            tlds: tlds.iter().map(|s| s.to_string()).collect(),
+            tlds: vec![".com".to_string()],
             batch_name: None,
-        }
-    }
-
-    #[test]
-    fn test_create_tasks_single_tld() {
-        let req = make_test_request(vec![".com"]);
+        };
         let result = create_tasks(req).unwrap();
         assert_eq!(result.created, 1);
         assert_eq!(result.skipped, 0);
+        assert_eq!(result.task_ids.len(), 1);
         assert!(result.batch_id.is_none());
     }
 
     #[test]
-    fn test_create_tasks_multiple_tlds() {
-        let req = make_test_request(vec![".com", ".net", ".org"]);
+    fn test_create_task_multi_tld() {
+        // Multi-TLD should create a single task (not multiple)
+        let req = CreateTasksRequest {
+            name: "Multi-TLD Task".to_string(),
+            scan_mode: ScanMode::Regex { pattern: "^[a-z]{3}$".to_string() },
+            tlds: vec![".com".to_string(), ".net".to_string(), ".org".to_string()],
+            batch_name: None,
+        };
         let result = create_tasks(req).unwrap();
-        assert_eq!(result.created, 3);
-        assert!(result.batch_id.is_some());
+        assert_eq!(result.created, 1); // Single task!
+        assert_eq!(result.skipped, 0);
+        assert_eq!(result.task_ids.len(), 1);
+        assert!(result.batch_id.is_none());
+    }
+
+    #[test]
+    fn test_create_task_dedup() {
+        // Note: :memory: DB is fresh each invocation. Dedup only works within a single
+        // connection, but each command creates its own. So we verify that creating the
+        // same task twice in separate commands both succeed (different :memory: databases).
+        let req1 = CreateTasksRequest {
+            name: "First".to_string(),
+            scan_mode: ScanMode::Manual { domains: vec!["hello".to_string()] },
+            tlds: vec![".com".to_string(), ".net".to_string()],
+            batch_name: None,
+        };
+        let result1 = create_tasks(req1).unwrap();
+        assert_eq!(result1.created, 1);
+
+        // Second creation on a new :memory: DB also succeeds (no shared state between calls)
+        let req2 = CreateTasksRequest {
+            name: "Duplicate".to_string(),
+            scan_mode: ScanMode::Manual { domains: vec!["hello".to_string()] },
+            tlds: vec![".com".to_string(), ".net".to_string()],
+            batch_name: None,
+        };
+        let result2 = create_tasks(req2).unwrap();
+        assert_eq!(result2.created, 1);
+    }
+
+    #[test]
+    fn test_create_task_different_tld_order_same_sig() {
+        // Verify that signature generation is deterministic and order-independent.
+        // (Actual dedup across :memory: DB boundaries cannot be tested here)
+        use crate::scanner::signature::generate_signature;
+        let mode = ScanMode::Manual { domains: vec!["test".to_string()] };
+
+        let sig_a = generate_signature(&mode, &vec![".net".to_string(), ".com".to_string()]);
+        let sig_b = generate_signature(&mode, &vec![".com".to_string(), ".net".to_string()]);
+        assert_eq!(sig_a, sig_b, "TLD order should not affect signature");
     }
 
     #[test]
     fn test_list_tasks() {
-        // Note: each command opens a new :memory: database, so we can't test
-        // cross-command data flow with :memory: databases.
-        // This test verifies the list endpoint works with an empty database.
         let list_req = ListTasksRequest {
             status: None,
             batch_id: None,

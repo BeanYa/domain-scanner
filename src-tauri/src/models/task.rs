@@ -34,7 +34,7 @@ pub enum ScanMode {
     Manual { domains: Vec<String> },
 }
 
-/// Core task model: 1 task = n prefixes x 1 TLD
+/// Core task model: 1 task = n prefixes x m TLDs (cartesian product)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
     pub id: String,
@@ -44,7 +44,9 @@ pub struct Task {
     pub status: TaskStatus,
     pub scan_mode: ScanMode,
     pub config_json: String,
-    pub tld: String,
+    /// Multiple TLDs this task scans against (e.g. [".com", ".net", ".org"])
+    pub tlds: Vec<String>,
+    /// Original prefix pattern for display
     pub prefix_pattern: Option<String>,
     pub total_count: i64,
     pub completed_count: i64,
@@ -53,6 +55,18 @@ pub struct Task {
     pub error_count: i64,
     pub created_at: String,
     pub updated_at: String,
+}
+
+impl Task {
+    /// Get the primary TLD (first one, for backward compat display)
+    pub fn primary_tld(&self) -> &str {
+        self.tlds.first().map(|s| s.as_str()).unwrap_or("")
+    }
+
+    /// Get TLD count
+    pub fn tld_count(&self) -> usize {
+        self.tlds.len()
+    }
 }
 
 /// Batch model: groups tasks created together
@@ -70,7 +84,7 @@ pub struct BatchCreateResult {
     pub created: u32,
     pub skipped: u32,
     pub task_ids: Vec<String>,
-    pub skipped_tlds: Vec<String>,
+    pub skipped_signatures: Vec<String>,
 }
 
 #[cfg(test)]
@@ -119,9 +133,9 @@ mod tests {
                 pattern: "^[a-z]{3}$".to_string(),
             },
             config_json: "{}".to_string(),
-            tld: ".com".to_string(),
+            tlds: vec![".com".to_string(), ".net".to_string()],
             prefix_pattern: Some("3-letter".to_string()),
-            total_count: 17576,
+            total_count: 35152, // 17576 * 2 TLDs
             completed_count: 0,
             completed_index: 0,
             available_count: 0,
@@ -133,7 +147,52 @@ mod tests {
         let json = serde_json::to_string(&task).unwrap();
         let deserialized: Task = serde_json::from_str(&json).unwrap();
         assert_eq!(task.id, deserialized.id);
-        assert_eq!(task.tld, deserialized.tld);
+        assert_eq!(task.tlds, deserialized.tlds);
+        assert_eq!(task.tld_count(), 2);
+        assert_eq!(task.primary_tld(), ".com");
         assert_eq!(task.status, deserialized.status);
+    }
+
+    #[test]
+    fn test_task_single_tld_compat() {
+        // Single TLD should work the same as before
+        let task = Task {
+            id: "t1".to_string(),
+            batch_id: None,
+            name: "Single TLD Task".to_string(),
+            signature: "sig1".to_string(),
+            status: TaskStatus::Running,
+            scan_mode: ScanMode::Manual { domains: vec!["test".to_string()] },
+            config_json: "{}".to_string(),
+            tlds: vec![".com".to_string()],
+            prefix_pattern: None,
+            total_count: 1,
+            completed_count: 0,
+            completed_index: 0,
+            available_count: 0,
+            error_count: 0,
+            created_at: "2026-01-01T00:00:00".to_string(),
+            updated_at: "2026-01-01T00:00:00".to_string(),
+        };
+        assert_eq!(task.primary_tld(), ".com");
+        assert_eq!(task.tld_count(), 1);
+
+        // Serialize/deserialize preserves single-element array
+        let json = serde_json::to_string(&task).unwrap();
+        assert!(json.contains("\"tlds\":[\".com\"]"));
+    }
+
+    #[test]
+    fn test_batch_create_result() {
+        let result = BatchCreateResult {
+            created: 1,
+            skipped: 0,
+            task_ids: vec!["t1".to_string()],
+            skipped_signatures: vec![],
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let deserialized: BatchCreateResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.created, 1);
+        assert_eq!(deserialized.skipped_signatures.len(), 0);
     }
 }

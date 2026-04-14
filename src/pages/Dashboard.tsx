@@ -8,6 +8,10 @@ import {
   TrendingUp,
   Clock,
   Cpu,
+  Play,
+  Pause,
+  ExternalLink,
+  ChevronRight,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
@@ -16,181 +20,206 @@ const stats = [
     label: "运行中",
     value: "3",
     icon: Activity,
-    color: "from-cyber-green to-cyber-cyan",
+    gradient: "from-cyber-green to-cyber-green-dim",
     textColor: "text-cyber-green",
-    shadow: "shadow-neon",
+    shadowClass: "shadow-neon",
+    change: "+1 较昨日",
+    changeType: "positive" as const,
+    miniBars: [60, 80, 45, 90, 70, 85, 75],
   },
   {
     label: "已完成",
     value: "24",
     icon: CheckCircle2,
-    color: "from-cyber-blue to-purple-500",
+    gradient: "from-cyber-blue to-cyber-purple",
     textColor: "text-cyber-blue",
-    shadow: "shadow-neon-blue",
+    shadowClass: "shadow-neon-blue",
+    change: "+5 本周",
+    changeType: "positive" as const,
+    miniBars: [30, 45, 55, 50, 70, 65, 80],
   },
   {
     label: "可用域名",
     value: "1,847",
     icon: Globe,
-    color: "from-cyber-orange to-amber-400",
+    gradient: "from-cyber-orange to-amber-400",
     textColor: "text-cyber-orange",
-    shadow: "shadow-neon-cyan",
+    shadowClass: "shadow-neon-orange",
+    change: "+127 本月",
+    changeType: "positive" as const,
+    miniBars: [20, 35, 40, 55, 48, 62, 70],
   },
   {
     label: "代理在线",
     value: "8/10",
     icon: Shield,
-    color: "from-cyber-cyan to-teal-400",
+    gradient: "from-cyber-cyan to-teal-400",
     textColor: "text-cyber-cyan",
-    shadow: "shadow-neon-cyan",
+    shadowClass: "shadow-neon-cyan",
+    change: "-1 离线",
+    changeType: "negative" as const,
+    miniBars: [90, 90, 88, 92, 85, 80, 80],
   },
 ];
 
 const recentTasks = [
-  {
-    id: "1",
-    name: "4字母 .com 扫描",
-    tld: ".com",
-    status: "running" as const,
-    progress: 67,
-    available: 234,
-    total: 456976,
-  },
-  {
-    id: "2",
-    name: "AI 相关 .io 扫描",
-    tld: ".io",
-    status: "running" as const,
-    progress: 42,
-    available: 89,
-    total: 500,
-  },
-  {
-    id: "3",
-    name: "3字母 .net 扫描",
-    tld: ".net",
-    status: "paused" as const,
-    progress: 31,
-    available: 156,
-    total: 17576,
-  },
-  {
-    id: "4",
-    name: "品牌词 .com 扫描",
-    tld: ".com",
-    status: "completed" as const,
-    progress: 100,
-    available: 412,
-    total: 2000,
-  },
-  {
-    id: "5",
-    name: "短域名 .org 扫描",
-    tld: ".org",
-    status: "completed" as const,
-    progress: 100,
-    available: 567,
-    total: 676,
-  },
+  { id: "1", name: "4字母扫描", tlds: [".com", ".net"], status: "running" as const, progress: 67, available: 234, total: 913952, speed: "~2.4k/s" },
+  { id: "2", name: "AI 相关扫描", tlds: [".io"], status: "running" as const, progress: 42, available: 89, total: 500, speed: "~120/s" },
+  { id: "3", name: "3字母扫描", tlds: [".net"], status: "paused" as const, progress: 31, available: 156, total: 17576, speed: "-" },
+  { id: "4", name: "品牌词扫描", tlds: [".com"], status: "completed" as const, progress: 100, available: 412, total: 2000, speed: "-" },
+  { id: "5", name: "短域名扫描", tlds: [".org", ".io", ".dev"], status: "completed" as const, progress: 100, available: 567, total: 2028, speed: "-" },
 ];
 
 const statusConfig = {
-  running: { label: "运行中", color: "text-cyber-green", bg: "bg-cyber-green/10", dot: "bg-cyber-green animate-pulse" },
-  paused: { label: "已暂停", color: "text-cyber-orange", bg: "bg-cyber-orange/10", dot: "bg-cyber-orange" },
-  completed: { label: "已完成", color: "text-cyber-blue", bg: "bg-cyber-blue/10", dot: "bg-cyber-blue" },
-  pending: { label: "等待中", color: "text-cyber-muted", bg: "bg-cyber-muted/10", dot: "bg-cyber-muted" },
+  running:   { label: "运行中", dotClass: "status-dot-running", btnIcon: Pause, btnLabel: "暂停", badgeClass: "badge-green" },
+  paused:    { label: "已暂停", dotClass: "status-dot-paused",  btnIcon: Play, btnLabel: "继续", badgeClass: "badge-orange" },
+  completed: { label: "已完成", dotClass: "status-dot-completed", btnIcon: ExternalLink, btnLabel: "查看", badgeClass: "badge-blue" },
+  pending:    { label: "等待中", dotClass: "status-dot-idle", btnIcon: Play, btnLabel: "启动", badgeClass: "badge-neutral" },
 };
+
+const quickActions = [
+  { icon: Zap, label: "新建扫描任务", desc: "正则 / 通配符 / LLM / 手动输入", to: "/tasks/new", color: "group-hover:text-cyber-green hover:border-cyber-green/25" },
+  { icon: Shield, label: "管理代理池", desc: "配置代理轮转策略与健康检查", to: "/proxies", color: "group-hover:text-cyber-cyan hover:border-cyber-cyan/25" },
+  { icon: Cpu, label: "向量化处理", desc: "GPU 加速语义搜索与智能过滤", to: "/vectorize", color: "group-hover:text-cyber-blue hover:border-cyber-blue/25" },
+];
+
+/* Mini bar chart component for stat cards */
+function MiniBarChart({ data }: { data: number[] }) {
+  return (
+    <div className="flex items-end gap-[3px] h-7">
+      {data.map((v, i) => (
+        <div
+          key={i}
+          className="flex-1 rounded-sm bg-current opacity-15 transition-all duration-300"
+          style={{ height: `${Math.max(10, v)}%` }}
+        />
+      ))}
+      <div
+        className="flex-1 rounded-sm bg-current opacity-50 transition-all duration-500"
+        style={{ height: `${Math.max(10, data[data.length - 1])}%` }}
+      />
+    </div>
+  );
+}
 
 export default function Dashboard() {
   const navigate = useNavigate();
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="space-y-6 animate-fade-in">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold neon-text">仪表盘</h1>
-          <p className="text-sm text-cyber-muted mt-1">域名扫描任务总览</p>
+          <h1 className="text-2xl font-bold neon-text tracking-tight">仪表盘</h1>
+          <p className="text-sm text-cyber-muted mt-1">域名扫描总览与系统状态</p>
         </div>
         <button
           onClick={() => navigate("/tasks/new")}
-          className="cyber-btn-primary flex items-center gap-2"
+          className="cyber-btn-primary"
         >
           <Zap className="w-4 h-4" />
           新建扫描
+          <ChevronRight className="w-3.5 h-3.5" />
         </button>
       </div>
 
-      {/* Stats Cards */}
+      {/* Stats Grid */}
       <div className="grid grid-cols-4 gap-4">
         {stats.map((stat) => (
-          <div
-            key={stat.label}
-            className={`glass-panel p-5 ${stat.shadow} hover:scale-[1.02] transition-transform duration-200`}
-          >
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-xs font-medium text-cyber-muted uppercase tracking-wider">
-                {stat.label}
-              </span>
-              <div className={`w-8 h-8 rounded-lg bg-gradient-to-br ${stat.color} flex items-center justify-center`}>
-                <stat.icon className="w-4 h-4 text-cyber-bg" />
+          <div key={stat.label} className={`stat-card group ${stat.shadowClass}`} style={{
+            ['--tw-gradient-from' as string]: undefined,
+          }}>
+            <div className="flex items-start justify-between mb-3">
+              <span className="text-xs font-medium text-cyber-muted uppercase tracking-wider">{stat.label}</span>
+              <div className={`w-9 h-9 rounded-xl bg-gradient-to-br ${stat.gradient} flex items-center justify-center`}>
+                <stat.icon className="w-4.5 h-4.5 text-white/90" />
               </div>
             </div>
-            <p className={`text-3xl font-bold ${stat.textColor}`}>{stat.value}</p>
+            <p className={`text-3xl font-bold tracking-tight ${stat.textColor}`}>{stat.value}</p>
+
+            {/* Mini bar chart */}
+            <div className={`${stat.textColor} mt-3`}>
+              <MiniBarChart data={stat.miniBars} />
+            </div>
+
+            {/* Change indicator */}
+            <div className={`flex items-center gap-1 mt-2 text-xs font-medium ${
+              stat.changeType === "positive" ? "text-cyber-green" : "text-cyber-orange"
+            }`}>
+              <span>{stat.change}</span>
+            </div>
           </div>
         ))}
       </div>
 
-      {/* Main Content */}
+      {/* Main Content Area */}
       <div className="grid grid-cols-3 gap-6">
-        {/* Recent Tasks */}
-        <div className="col-span-2 glass-panel p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-base font-semibold text-cyber-text flex items-center gap-2">
+        {/* Recent Tasks Panel (2 cols wide) */}
+        <div className="col-span-2 glass-panel p-5 space-y-4">
+          <div className="section-header">
+            <h2 className="section-title">
               <Clock className="w-4 h-4 text-cyber-green" />
               最近任务
             </h2>
             <button
               onClick={() => navigate("/tasks")}
-              className="text-xs text-cyber-muted hover:text-cyber-green transition-colors flex items-center gap-1"
+              className="cyber-btn-ghost cyber-btn-sm text-cyber-muted-dim hover:text-cyber-green group"
             >
-              查看全部 <ArrowRight className="w-3 h-3" />
+              查看全部
+              <ArrowRight className="w-3 h-3 transition-transform group-hover:translate-x-0.5" />
             </button>
           </div>
-          <div className="space-y-3">
+
+          {/* Task List */}
+          <div className="space-y-2.5">
             {recentTasks.map((task) => {
               const cfg = statusConfig[task.status];
+              const BtnIcon = cfg.btnIcon;
               return (
                 <div
                   key={task.id}
-                  className="flex items-center gap-4 p-3 rounded-lg bg-cyber-bg/50 hover:bg-cyber-card/40 transition-colors cursor-pointer"
+                  className="task-card group"
                   onClick={() => navigate(`/tasks/${task.id}`)}
                 >
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className={`w-1.5 h-1.5 rounded-full ${cfg.dot}`} />
-                      <span className="text-sm font-medium text-cyber-text truncate">
-                        {task.name}
-                      </span>
-                      <span className="text-xs text-cyber-muted px-1.5 py-0.5 rounded bg-cyber-surface">
-                        {task.tld}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <div className="flex-1 h-1.5 rounded-full bg-cyber-surface overflow-hidden">
-                        <div
-                          className="h-full rounded-full bg-gradient-to-r from-cyber-green to-cyber-cyan transition-all duration-500"
-                          style={{ width: `${task.progress}%` }}
-                        />
+                  <div className="flex items-start justify-between gap-4">
+                    {/* Left: Info */}
+                    <div className="flex-1 min-w-0">
+                      {/* Name row + TLDs + Status + Action */}
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className={`dot ${cfg.dotClass} shrink-0`} />
+                        <span className="text-sm font-semibold text-cyber-text truncate">{task.name}</span>
+
+                        {/* TLD badges */}
+                        <div className="flex items-center gap-1 shrink-0">
+                          {task.tlds.slice(0, 3).map((tld) => (
+                            <span key={tld} className="badge-neutral text-[11px]">{tld}</span>
+                          ))}
+                          {task.tlds.length > 3 && (
+                            <span className="badge-blue text-[11px]">+{task.tlds.length - 3}</span>
+                          )}
+                        </div>
+
+                        <span className={`${cfg.badgeClass} text-[11px] ml-auto shrink-0`}>{cfg.label}</span>
                       </div>
-                      <span className="text-xs text-cyber-muted w-10 text-right">
-                        {task.progress}%
-                      </span>
+
+                      {/* Progress bar */}
+                      <div className="flex items-center gap-3">
+                        <div className="flex-1 progress-bar max-w-[240px]">
+                          <div
+                            className="progress-bar-fill"
+                            style={{ width: `${task.progress}%` }}
+                          />
+                        </div>
+                        <span className="text-xs font-mono text-cyber-muted w-9 text-right tabular-nums">{task.progress}%</span>
+                        <span className="text-[11px] text-cyber-muted-dim w-14 text-right tabular-nums hidden sm:block">{task.speed}</span>
+                      </div>
                     </div>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-sm font-semibold text-cyber-green">{task.available}</p>
-                    <p className="text-[10px] text-cyber-muted">可用</p>
+
+                    {/* Right: Available count + Quick action */}
+                    <div className="text-right shrink-0 pl-2 border-l border-cyber-border/20 min-w-[72px]">
+                      <p className="text-lg font-bold text-cyber-green tabular-nums">{task.available.toLocaleString()}</p>
+                      <p className="text-[10px] text-cyber-muted-dim">可用域名</p>
+                    </div>
                   </div>
                 </div>
               );
@@ -198,62 +227,66 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Quick Actions */}
+        {/* Right Sidebar */}
         <div className="space-y-4">
+          {/* Quick Actions Card */}
           <div className="glass-panel p-5">
-            <h2 className="text-base font-semibold text-cyber-text mb-4 flex items-center gap-2">
-              <TrendingUp className="w-4 h-4 text-cyber-cyan" />
+            <h2 className="section-title mb-4">
+              <TrendingUp className="w-4 h-4 text-cyber-cyan-bright" />
               快捷操作
             </h2>
             <div className="space-y-2">
-              <button
-                onClick={() => navigate("/tasks/new")}
-                className="w-full p-3 rounded-lg bg-cyber-bg/50 hover:bg-cyber-green/10 border border-cyber-border/30 hover:border-cyber-green/30 transition-all text-left group"
-              >
-                <p className="text-sm font-medium text-cyber-text group-hover:text-cyber-green transition-colors">
-                  新建扫描任务
-                </p>
-                <p className="text-xs text-cyber-muted mt-0.5">正则/通配符/LLM/手动</p>
-              </button>
-              <button
-                onClick={() => navigate("/proxies")}
-                className="w-full p-3 rounded-lg bg-cyber-bg/50 hover:bg-cyber-cyan/10 border border-cyber-border/30 hover:border-cyber-cyan/30 transition-all text-left group"
-              >
-                <p className="text-sm font-medium text-cyber-text group-hover:text-cyber-cyan transition-colors">
-                  管理代理
-                </p>
-                <p className="text-xs text-cyber-muted mt-0.5">配置代理轮转</p>
-              </button>
-              <button
-                onClick={() => navigate("/vectorize")}
-                className="w-full p-3 rounded-lg bg-cyber-bg/50 hover:bg-cyber-blue/10 border border-cyber-border/30 hover:border-cyber-blue/30 transition-all text-left group"
-              >
-                <p className="text-sm font-medium text-cyber-text group-hover:text-cyber-blue transition-colors">
-                  向量化处理
-                </p>
-                <p className="text-xs text-cyber-muted mt-0.5">GPU 加速语义搜索</p>
-              </button>
+              {quickActions.map(({ icon: Icon, label, desc, to, color }) => (
+                <button
+                  key={to}
+                  onClick={() => navigate(to)}
+                  className={`w-full p-3.5 rounded-xl bg-cyber-bg-elevated/60 border border-cyber-border/25 
+                           text-left group transition-all duration-200 hover:bg-cyber-surface/60 ${color}`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-cyber-card border border-cyber-border/20 
+                                flex items-center justify-center shrink-0
+                                group-hover:border-current/20 transition-colors">
+                      <Icon className="w-4 h-4 text-cyber-muted group-hover:text-inherit transition-colors" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-cyber-text group-hover:text-inherit transition-colors leading-snug">{label}</p>
+                      <p className="text-[11px] text-cyber-muted-dim mt-0.5">{desc}</p>
+                    </div>
+                    <ChevronRight className="w-3.5 h-3.5 ml-auto text-cyber-border-light opacity-0 group-hover:opacity-100 transition-opacity" />
+                  </div>
+                </button>
+              ))}
             </div>
           </div>
 
-          {/* GPU Status Card */}
-          <div className="glass-panel p-5">
-            <h2 className="text-base font-semibold text-cyber-text mb-3 flex items-center gap-2">
+          {/* GPU / System Status Card */}
+          <div className="glass-panel p-5 space-y-4">
+            <h2 className="section-title">
               <Cpu className="w-4 h-4 text-cyber-green" />
-              GPU 状态
+              系统状态
             </h2>
-            <div className="space-y-2">
-              <div className="flex justify-between text-xs">
-                <span className="text-cyber-muted">后端</span>
-                <span className="text-cyber-green font-medium">CPU (无 GPU)</span>
+
+            {/* GPU Info */}
+            <div className="rounded-xl bg-cyber-bg-elevated/60 p-3.5 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-cyber-muted">推理后端</span>
+                <span className="text-xs font-semibold text-cyber-orange px-2 py-0.5 rounded-md bg-cyber-orange/8">CPU</span>
               </div>
-              <div className="flex justify-between text-xs">
-                <span className="text-cyber-muted">模型</span>
-                <span className="text-cyber-text">MiniLM-L6-v2</span>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-cyber-muted">Embedding 模型</span>
+                <span className="text-xs font-mono text-cyber-text-secondary">MiniLM-L6-v2</span>
               </div>
-              <div className="flex justify-between text-xs">
-                <span className="text-cyber-muted">维度</span>
-                <span className="text-cyber-text">384</span>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-cyber-muted">向量维度</span>
+                <span className="text-xs font-mono text-cyber-text-secondary">384-d</span>
+              </div>
+
+              <div className="divider my-1" />
+
+              <div className="flex items-center gap-2 p-2 rounded-lg bg-cyber-green/4 border border-cyber-green/12">
+                <Cpu className="w-3.5 h-3.5 text-cyber-green/70" />
+                <span className="text-[11px] text-cyber-green/80">启用 --features gpu-directml 以使用 AMD GPU 加速</span>
               </div>
             </div>
           </div>

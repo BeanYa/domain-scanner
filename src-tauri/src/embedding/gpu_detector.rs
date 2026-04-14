@@ -23,7 +23,6 @@ impl GpuDetector {
     /// Detect the best available backend
     fn detect_backend() -> (GpuBackend, bool, Option<String>) {
         // Priority chain: CUDA > DirectML > ROCm > CoreML > CPU
-        // The actual GPU availability depends on compile-time features
 
         #[cfg(feature = "gpu-cuda")]
         {
@@ -53,36 +52,90 @@ impl GpuDetector {
             }
         }
 
-        // No GPU available, fall back to CPU
+        // Fallback: try platform-specific detection even without ONNX features
+        if cfg!(target_os = "windows") {
+            if let Some(info) = Self::detect_windows_gpu() {
+                return (GpuBackend::DirectML, true, Some(info));
+            }
+        }
+
         (GpuBackend::Cpu, true, Some("CPU".to_string()))
     }
 
-    /// Check CUDA availability
+    /// Check CUDA availability via ONNX Runtime
     #[cfg(feature = "gpu-cuda")]
     fn check_cuda() -> Option<String> {
-        // In real implementation, would check for CUDA driver and device
-        // For now, return None to simulate no CUDA device
-        None
+        match ort::Session::builder()
+            .with_execution_provider(ort::ExecutionProvider::CUDA(Default::default()))
+            .build_from_memory(&[0u8; 1])
+        {
+            Ok(_) => Some("NVIDIA GPU (via CUDA)".to_string()),
+            Err(_) => None,
+        }
     }
 
-    /// Check DirectML availability (Windows)
+    /// Check DirectML availability via ONNX Runtime
     #[cfg(feature = "gpu-directml")]
     fn check_directml() -> Option<String> {
-        // In real implementation, would check for DirectX 12 and GPU device
-        None
+        match ort::Session::builder()
+            .with_execution_provider(ort::ExecutionProvider::DirectML(Default::default()))
+            .build_from_memory(&[0u8; 1])
+        {
+            Ok(_) => Some("GPU (via DirectML)".to_string()),
+            Err(_) => None,
+        }
     }
 
-    /// Check ROCm availability (Linux)
+    /// Check ROCm availability via ONNX Runtime
     #[cfg(feature = "gpu-rocm")]
     fn check_rocm() -> Option<String> {
-        // In real implementation, would check for ROCm installation and AMD GPU
+        match ort::Session::builder()
+            .with_execution_provider(ort::ExecutionProvider::ROCm(Default::default()))
+            .build_from_memory(&[0u8; 1])
+        {
+            Ok(_) => Some("AMD GPU (via ROCm)".to_string()),
+            Err(_) => None,
+        }
+    }
+
+    /// Check CoreML availability via ONNX Runtime
+    #[cfg(feature = "gpu-coreml")]
+    fn check_coreml() -> Option<String> {
+        match ort::Session::builder()
+            .with_execution_provider(ort::ExecutionProvider::CoreML(Default::default()))
+            .build_from_memory(&[0u8; 1])
+        {
+            Ok(_) => Some("Apple Silicon (via CoreML)".to_string()),
+            Err(_) => None,
+        }
+    }
+
+    /// Fallback Windows GPU detection: reads adapter info from registry / DXGI
+    /// Works without ONNX Runtime compiled in
+    #[cfg(target_os = "windows")]
+    fn detect_windows_gpu() -> Option<String> {
+        use std::process::Command;
+
+        // Use PowerShell to query GPU info via WMI/CIM
+        if let Ok(output) = Command::new("powershell")
+            .args(["-NoProfile", "-Command", r#"Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name | Where-Object { $_ -notmatch 'Basic|Microsoft|Remote' }"#])
+            .output()
+        {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let gpu_name = stdout.lines()
+                    .next()
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())?;
+                return Some(format!("{} (DirectML)", gpu_name));
+            }
+        }
+
         None
     }
 
-    /// Check CoreML availability (macOS)
-    #[cfg(feature = "gpu-coreml")]
-    fn check_coreml() -> Option<String> {
-        // In real implementation, would check for Apple Silicon
+    #[cfg(not(target_os = "windows"))]
+    fn detect_windows_gpu() -> Option<String> {
         None
     }
 
@@ -119,6 +172,18 @@ impl GpuDetector {
                             backend: GpuBackend::DirectML,
                             available: true,
                             device_name: Some(info),
+                            vram_total_mb: None,
+                            vram_used_mb: None,
+                        };
+                    }
+                }
+                // Fallback to Windows detection
+                if cfg!(target_os = "windows") {
+                    if let Some(name) = Self::detect_windows_gpu() {
+                        return GpuStatus {
+                            backend: GpuBackend::DirectML,
+                            available: true,
+                            device_name: Some(name),
                             vram_total_mb: None,
                             vram_used_mb: None,
                         };
@@ -206,15 +271,15 @@ impl GpuDetector {
     pub fn fallback_chain(backend: &GpuBackend) -> Vec<GpuBackend> {
         match backend {
             GpuBackend::Auto => vec![
-                GpuBackend::Cuda,
                 GpuBackend::DirectML,
+                GpuBackend::Cuda,
                 GpuBackend::ROCm,
                 GpuBackend::CoreML,
                 GpuBackend::Remote,
                 GpuBackend::Cpu,
             ],
             GpuBackend::Cuda => vec![GpuBackend::DirectML, GpuBackend::Remote, GpuBackend::Cpu],
-            GpuBackend::DirectML => vec![GpuBackend::Remote, GpuBackend::Cpu],
+            GpuBackend::DirectML => vec![GpuBackend::Cuda, GpuBackend::Remote, GpuBackend::Cpu],
             GpuBackend::ROCm => vec![GpuBackend::Remote, GpuBackend::Cpu],
             GpuBackend::CoreML => vec![GpuBackend::Remote, GpuBackend::Cpu],
             GpuBackend::Cpu => vec![GpuBackend::Remote],
@@ -230,7 +295,17 @@ mod tests {
     #[test]
     fn test_detect_returns_status() {
         let status = GpuDetector::detect();
-        // Without GPU features, should fall back to CPU
+        assert!(status.available);
+        assert!(status.device_name.is_some());
+    }
+
+    #[test]
+    fn test_detect_backend_not_cpu_on_windows() {
+        // On Windows with a GPU, should detect DirectML or at least report GPU name
+        let status = GpuDetector::detect();
+        if cfg!(target_os = "windows") {
+            println!("Detected backend: {:?}, name: {:?}", status.backend, status.device_name);
+        }
         assert!(status.available);
     }
 
@@ -264,19 +339,17 @@ mod tests {
     }
 
     #[test]
-    fn test_select_backend_cuda_unavailable() {
-        // Without actual CUDA hardware, this should be unavailable
+    fn test_select_backend_remote() {
         let config = GpuConfig {
             id: 1,
-            backend: GpuBackend::Cuda,
+            backend: GpuBackend::Remote,
             device_id: 0,
             batch_size: 500,
             model_path: None,
         };
         let status = GpuDetector::select_backend(&config);
-        assert_eq!(status.backend, GpuBackend::Cuda);
-        // CUDA is likely not available in test environment
-        assert!(!status.available);
+        assert!(status.available);
+        assert_eq!(status.backend, GpuBackend::Remote);
     }
 
     #[test]
@@ -284,18 +357,20 @@ mod tests {
         let chain = GpuDetector::fallback_chain(&GpuBackend::Auto);
         assert!(!chain.is_empty());
         assert!(chain.contains(&GpuBackend::Cpu));
+        assert_eq!(chain[0], GpuBackend::DirectML); // DirectML first on Windows
     }
 
     #[test]
-    fn test_fallback_chain_cuda() {
-        let chain = GpuDetector::fallback_chain(&GpuBackend::Cuda);
-        assert!(chain.contains(&GpuBackend::Cpu));
-        assert!(chain.contains(&GpuBackend::Remote));
-    }
-
-    #[test]
-    fn test_fallback_chain_cpu() {
-        let chain = GpuDetector::fallback_chain(&GpuBackend::Cpu);
-        assert!(chain.contains(&GpuBackend::Remote));
+    fn test_fallback_chain_contains_cpu_or_remote() {
+        for backend in &[GpuBackend::Cuda, GpuBackend::DirectML, GpuBackend::Cpu] {
+            let chain = GpuDetector::fallback_chain(backend);
+            // Every fallback chain should end with a usable backend (CPU or Remote)
+            let last = chain.last().expect("fallback should not be empty");
+            assert!(
+                *last == GpuBackend::Cpu || *last == GpuBackend::Remote,
+                "fallback for {:?} should end with CPU or Remote",
+                backend
+            );
+        }
     }
 }

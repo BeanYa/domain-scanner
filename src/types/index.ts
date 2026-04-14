@@ -18,7 +18,8 @@ export interface Task {
   status: TaskStatus;
   scan_mode: ScanMode;
   config_json: string;
-  tld: string;
+  /** Multiple TLDs this task scans (e.g. [".com", ".net", ".org"]) */
+  tlds: string[];
   prefix_pattern: string | null;
   total_count: number;
   completed_count: number;
@@ -27,6 +28,9 @@ export interface Task {
   error_count: number;
   created_at: string;
   updated_at: string;
+
+  /** Get the primary TLD for backward compat display */
+  primaryTld(): string;
 }
 
 export interface TaskBatch {

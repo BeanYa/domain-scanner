@@ -78,7 +78,7 @@ impl ScanEngine {
         }
 
         // Create generator starting from checkpoint
-        let mut generator = ListGenerator::new(task.scan_mode.clone(), task.tld.clone())
+        let mut generator = ListGenerator::new(task.scan_mode.clone(), task.tlds.clone())
             .with_start_index(task.completed_index);
 
         let semaphore = Arc::new(Semaphore::new(self.config.max_concurrency));

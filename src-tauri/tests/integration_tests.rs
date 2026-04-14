@@ -19,11 +19,14 @@ fn test_task_lifecycle() {
         id: "task-1".to_string(),
         batch_id: None,
         name: "Test Task".to_string(),
-        signature: generate_signature(&ScanMode::Regex { pattern: "^[a-z]{3}$".to_string() }, ".com"),
+        signature: generate_signature(
+            &ScanMode::Regex { pattern: "^[a-z]{3}$".to_string() },
+            &vec![".com".to_string()],
+        ),
         status: TaskStatus::Pending,
         scan_mode: ScanMode::Regex { pattern: "^[a-z]{3}$".to_string() },
         config_json: "{}".to_string(),
-        tld: ".com".to_string(),
+        tlds: vec![".com".to_string()],
         prefix_pattern: Some("^[a-z]{3}$".to_string()),
         total_count: 17576,
         completed_count: 0,
@@ -38,6 +41,7 @@ fn test_task_lifecycle() {
     // Verify creation
     let fetched = repo.get_by_id("task-1").unwrap().unwrap();
     assert_eq!(fetched.status, TaskStatus::Pending);
+    assert_eq!(fetched.tlds, vec![".com"]);
 
     // Start
     assert!(fetched.status.can_transition_to(&TaskStatus::Running));
@@ -66,9 +70,9 @@ fn test_task_lifecycle() {
     assert!(!fetched.status.can_transition_to(&TaskStatus::Running));
 }
 
-/// Test multi-TLD batch creation with signature dedup
+/// Test multi-TLD task creation (single task with multiple TLDs)
 #[test]
-fn test_multi_tld_batch_creation_with_dedup() {
+fn test_multi_tld_task_creation() {
     init::register_vec_extension();
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     init::init_database(&conn).unwrap();
@@ -80,55 +84,48 @@ fn test_multi_tld_batch_creation_with_dedup() {
     let batch = TaskBatch {
         id: "batch-1".to_string(),
         name: "Multi TLD Batch".to_string(),
-        task_count: 3,
+        task_count: 1,
         created_at: "2026-01-01T00:00:00".to_string(),
     };
     batch_repo.create(&batch).unwrap();
 
+    // Create a single task with multiple TLDs (the new model)
     let scan_mode = ScanMode::Regex { pattern: "^[a-z]{3}$".to_string() };
-    let tlds = vec![".com", ".net", ".org"];
-    let mut created = 0;
-    let mut skipped = 0;
+    let tlds = vec![".com".to_string(), ".net".to_string(), ".org".to_string()];
+    let sig = generate_signature(&scan_mode, &tlds);
 
-    for tld in &tlds {
-        let sig = generate_signature(&scan_mode, tld);
-        if task_repo.signature_exists(&sig).unwrap() {
-            skipped += 1;
-            continue;
-        }
-        let task = Task {
-            id: format!("task-{}", tld.trim_start_matches('.')),
-            batch_id: Some("batch-1".to_string()),
-            name: format!("3-letter {}", tld),
-            signature: sig,
-            status: TaskStatus::Pending,
-            scan_mode: scan_mode.clone(),
-            config_json: "{}".to_string(),
-            tld: tld.to_string(),
-            prefix_pattern: Some("^[a-z]{3}$".to_string()),
-            total_count: 17576,
-            completed_count: 0,
-            completed_index: 0,
-            available_count: 0,
-            error_count: 0,
-            created_at: "2026-01-01T00:00:00".to_string(),
-            updated_at: "2026-01-01T00:00:00".to_string(),
-        };
-        task_repo.create(&task).unwrap();
-        created += 1;
-    }
+    let task = Task {
+        id: "task-multi".to_string(),
+        batch_id: Some("batch-1".to_string()),
+        name: "3-letter multi-TLD".to_string(),
+        signature: sig.clone(),
+        status: TaskStatus::Pending,
+        scan_mode: scan_mode.clone(),
+        config_json: "{}".to_string(),
+        tlds: tlds.clone(),
+        prefix_pattern: Some("^[a-z]{3}$".to_string()),
+        total_count: 17576 * 3, // 3 TLDs
+        completed_count: 0,
+        completed_index: 0,
+        available_count: 0,
+        error_count: 0,
+        created_at: "2026-01-01T00:00:00".to_string(),
+        updated_at: "2026-01-01T00:00:00".to_string(),
+    };
+    task_repo.create(&task).unwrap();
 
-    assert_eq!(created, 3);
-    assert_eq!(skipped, 0);
+    // Verify: one task with 3 TLDs
+    let fetched = task_repo.get_by_id("task-multi").unwrap().unwrap();
+    assert_eq!(fetched.tlds.len(), 3);
+    assert_eq!(fetched.total_count, 17576 * 3);
 
-    // Try creating again with same TLDs - should all be skipped
-    for tld in &tlds {
-        let sig = generate_signature(&scan_mode, tld);
-        if task_repo.signature_exists(&sig).unwrap() {
-            skipped += 1;
-        }
-    }
-    assert_eq!(skipped, 3);
+    // Verify dedup: same signature should be rejected
+    let dup_result = task_repo.create(&task);
+    assert!(dup_result.is_err(), "Duplicate signature should be rejected");
+
+    // Verify order-independence: [.net,.com] produces same signature as [.com,.net]
+    let sig_reversed = generate_signature(&scan_mode, &vec![".net".to_string(), ".com".to_string(), ".org".to_string()]);
+    assert_eq!(sig, sig_reversed, "TLD order should not affect signature");
 }
 
 /// Test checkpoint resume via completed_index
@@ -148,7 +145,7 @@ fn test_checkpoint_resume() {
         status: TaskStatus::Running,
         scan_mode: ScanMode::Regex { pattern: "^[a-z]{2}$".to_string() },
         config_json: "{}".to_string(),
-        tld: ".com".to_string(),
+        tlds: vec![".com".to_string()],
         prefix_pattern: Some("^[a-z]{2}$".to_string()),
         total_count: 676,
         completed_count: 0,
@@ -196,13 +193,13 @@ fn test_batch_operations() {
     let batch = TaskBatch {
         id: "batch-op".to_string(),
         name: "Ops Batch".to_string(),
-        task_count: 3,
+        task_count: 2,
         created_at: "2026-01-01T00:00:00".to_string(),
     };
     batch_repo.create(&batch).unwrap();
 
-    // Create tasks
-    for i in 0..3 {
+    // Create tasks (each can have different TLD sets)
+    for i in 0..2 {
         let task = Task {
             id: format!("task-op-{}", i),
             batch_id: Some("batch-op".to_string()),
@@ -211,7 +208,7 @@ fn test_batch_operations() {
             status: TaskStatus::Running,
             scan_mode: ScanMode::Regex { pattern: "^[a-z]{2}$".to_string() },
             config_json: "{}".to_string(),
-            tld: format!(".tld{}", i),
+            tlds: vec![format!(".tld{}", i)],
             prefix_pattern: None,
             total_count: 676,
             completed_count: 0,
@@ -265,7 +262,7 @@ fn test_scan_items_batch_and_pagination() {
         status: TaskStatus::Running,
         scan_mode: ScanMode::Regex { pattern: "^[a-z]{2}$".to_string() },
         config_json: "{}".to_string(),
-        tld: ".com".to_string(),
+        tlds: vec![".com".to_string()],
         prefix_pattern: None,
         total_count: 676,
         completed_count: 0,

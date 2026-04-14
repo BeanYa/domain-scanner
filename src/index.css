@@ -2,14 +2,21 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ============================================
+   Base Styles
+   ============================================ */
 @layer base {
   * {
     @apply border-cyber-border;
   }
 
   body {
-    @apply bg-cyber-bg text-cyber-text;
+    @apply bg-cyber-bg text-cyber-text antialiased;
     font-feature-settings: "rlig" 1, "calt" 1;
+    /* Subtle grid pattern background */
+    background-image:
+      radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.025) 1px, transparent 0);
+    background-size: 24px 24px;
   }
 
   /* Custom scrollbar */
@@ -18,52 +25,238 @@
     height: 6px;
   }
   ::-webkit-scrollbar-track {
-    @apply bg-cyber-bg;
+    @apply bg-transparent;
   }
   ::-webkit-scrollbar-thumb {
-    @apply bg-cyber-border rounded-full;
+    @apply bg-cyber-border-light rounded-full;
   }
   ::-webkit-scrollbar-thumb:hover {
-    @apply bg-cyber-muted;
+    @apply bg-cyber-muted-dim;
+  }
+
+  /* Selection */
+  ::selection {
+    @apply bg-cyber-green/20 text-cyber-text;
+  }
+
+  /* Focus visible ring for accessibility */
+  :focus-visible {
+    @apply outline-none ring-2 ring-cyber-green/40 ring-offset-2 ring-offset-cyber-bg;
   }
 }
 
+/* ============================================
+   Component Classes
+   ============================================ */
 @layer components {
+  /* ---- Glass Panel (enhanced) ---- */
   .glass-panel {
-    @apply bg-cyber-card/60 backdrop-blur-md border border-cyber-border/50 rounded-xl;
+    @apply bg-cyber-card/70 backdrop-blur-xl border border-cyber-border/40
+           rounded-2xl shadow-glass transition-all duration-200;
+  }
+  .glass-panel:hover {
+    @apply border-cyber-border-light/50;
+  }
+  .glass-panel-elevated {
+    @apply glass-panel shadow-elevated;
   }
 
+  /* ---- Neon Text Gradient ---- */
   .neon-text {
-    @apply text-transparent bg-clip-text bg-gradient-to-r from-cyber-green to-cyber-cyan;
+    @apply text-transparent bg-clip-text bg-gradient-to-r from-cyber-green via-cyber-cyan to-cyber-blue;
+  }
+  .neon-text-warm {
+    @apply text-transparent bg-clip-text bg-gradient-to-r from-cyber-orange to-cyber-pink;
+  }
+  .neon-text-cool {
+    @apply text-transparent bg-clip-text bg-gradient-to-r from-cyber-blue to-cyber-purple;
   }
 
-  .neon-border {
-    @apply border border-cyber-green/30 shadow-neon;
-  }
-
+  /* ---- Input System ---- */
   .cyber-input {
-    @apply bg-cyber-surface border border-cyber-border rounded-lg px-3 py-2 text-cyber-text
-           placeholder:text-cyber-muted focus:outline-none focus:border-cyber-green/50
-           focus:shadow-neon transition-all duration-200;
+    @apply w-full px-3.5 py-2.5 bg-cyber-surface border border-cyber-border/60
+           rounded-xl text-sm text-cyber-text placeholder:text-cyber-muted-dim
+           focus:outline-none focus:border-cyber-green/40 focus:bg-cyber-card/50
+           focus:shadow-neon transition-all duration-200
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .cyber-input-icon {
+    @apply relative;
+  }
+  .cyber-input-icon > input {
+    @apply pl-10;
+  }
+  .cyber-input-icon > svg {
+    @apply absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-cyber-muted-dim pointer-events-none;
+  }
+  .cyber-input-error {
+    @apply focus:border-cyber-red/50 focus:shadow-neon-red;
+  }
+  .cyber-input-success {
+    @apply focus:border-cyber-green/50 focus:shadow-neon;
   }
 
+  /* ---- Button System ---- */
   .cyber-btn {
-    @apply px-4 py-2 rounded-lg font-medium transition-all duration-200
-           focus:outline-none focus:ring-2 focus:ring-cyber-green/50 cursor-pointer;
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-medium text-sm
+           transition-all duration-200 ease-out
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyber-green/40
+           disabled:opacity-50 disabled:pointer-events-none active:scale-[0.97]
+           cursor-pointer select-none;
   }
-
   .cyber-btn-primary {
-    @apply cyber-btn bg-gradient-to-r from-cyber-green to-cyber-cyan text-cyber-bg
-           hover:shadow-neon hover:scale-[1.02] active:scale-[0.98];
+    @apply cyber-btn
+           bg-gradient-to-r from-cyber-green to-cyber-green-dim text-cyber-bg font-semibold
+           shadow-neon hover:shadow-glow hover:brightness-110 hover:-translate-y-px;
   }
-
   .cyber-btn-secondary {
-    @apply cyber-btn bg-cyber-surface border border-cyber-border text-cyber-text
-           hover:bg-cyber-card hover:border-cyber-green/30;
+    @apply cyber-btn
+           bg-cyber-surface border border-cyber-border/50 text-cyber-text-secondary
+           hover:bg-cyber-card-hover hover:border-cyber-border-light hover:text-cyber-text;
+  }
+  .cyber-btn-ghost {
+    @apply cyber-btn
+           text-cyber-muted hover:text-cyber-text hover:bg-cyber-card/50;
+  }
+  .cyber-btn-danger {
+    @apply cyber-btn
+           bg-cyber-red/10 border border-cyber-red/25 text-cyber-red
+           hover:bg-cyber-red/20 hover:border-cyber-red/40 hover:shadow-neon-red;
+  }
+  .cyber-btn-sm {
+    @apply px-3 py-1.5 text-xs rounded-lg gap-1.5;
+  }
+  .cyber-btn-lg {
+    @apply px-6 py-3 text-base rounded-2xl gap-2.5;
+  }
+  .cyber-btn-icon {
+    @apply p-2.5 rounded-xl aspect-square;
   }
 
-  .cyber-btn-danger {
-    @apply cyber-btn bg-cyber-red/10 border border-cyber-red/30 text-cyber-red
-           hover:bg-cyber-red/20 hover:border-cyber-red/50;
+  /* ---- Badge / Tag ---- */
+  .badge {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium
+           leading-tight whitespace-nowrap;
+  }
+  .badge-green { @apply badge bg-cyber-green/10 text-cyber-green; }
+  .badge-blue   { @apply badge bg-cyber-blue/10 text-cyber-blue; }
+  .badge-orange { @apply badge bg-cyber-orange/10 text-cyber-orange; }
+  .badge-red   { @apply badge bg-cyber-red/10 text-cyber-red; }
+  .badge-purple { @apply badge bg-cyber-purple/10 text-cyber-purple; }
+  .badge-neutral { @apply badge bg-cyber-surface text-cyber-muted border border-cyber-border/30; }
+
+  /* ---- Card Variants ---- */
+  .stat-card {
+    @apply glass-panel p-5 relative overflow-hidden cursor-default;
+  }
+  .stat-card::before {
+    content: "";
+    @apply absolute top-0 left-0 right-0 h-px opacity-0 group-hover:opacity-100 transition-opacity duration-300;
+    background: linear-gradient(90deg, transparent, var(--tw-gradient-from), var(--tw-gradient-to), transparent);
+  }
+
+  .task-card {
+    @apply p-4 rounded-xl bg-cyber-bg-elevated/80 backdrop-blur-sm border border-cyber-border/30
+           hover:border-cyber-border-light/50 hover:bg-cyber-surface/60
+           transition-all duration-200 cursor-pointer;
+  }
+  .task-card:active {
+    @apply scale-[0.995];
+  }
+
+  /* ---- Progress Bar ---- */
+  .progress-bar {
+    @apply h-1.5 rounded-full bg-cyber-surface overflow-hidden;
+  }
+  .progress-bar-fill {
+    @apply h-full rounded-full bg-gradient-to-r from-cyber-green to-cyber-cyan
+           transition-all duration-700 ease-out relative;
+  }
+  .progress-bar-fill::after {
+    content: "";
+    @apply absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent;
+    animation: shimmer 2s linear infinite;
+    background-size: 200% 100%;
+  }
+
+  /* ---- Table ---- */
+  .data-table {
+    @apply w-full text-sm;
+  }
+  .data-table th {
+    @apply px-4 py-3 text-left text-xs font-semibold text-cyber-muted uppercase tracking-wider
+           bg-cyber-surface/60 border-b border-cyber-border/30;
+  }
+  .data-table td {
+    @apply px-4 py-3 border-b border-cyber-border/15 text-cyber-text-secondary;
+  }
+  .data-table tbody tr {
+    @apply hover:bg-cyber-card/30 transition-colors duration-150;
+  }
+
+  /* ---- Section Header ---- */
+  .section-header {
+    @apply flex items-center justify-between mb-4;
+  }
+  .section-title {
+    @apply text-base font-semibold text-cyber-text flex items-center gap-2;
+  }
+
+  /* ---- Skeleton Loading ---- */
+  .skeleton {
+    @apply animate-pulse bg-gradient-to-r from-cyber-surface via-cyber-card to-cyber-surface
+           bg-[length:200%_100%] shimmer rounded-md;
+  }
+  .skeleton-line {
+    @apply skeleton h-3;
+  }
+  .skeleton-circle {
+    @apply skeleton rounded-full;
+  }
+
+  /* ---- Empty State ---- */
+  .empty-state {
+    @apply flex flex-col items-center justify-center py-16 text-center;
+  }
+
+  /* ---- Status Dot ---- */
+  .status-dot {
+    @apply w-2 h-2 rounded-full;
+  }
+  .status-dot-running { @apply status-dot bg-cyber-green animate-pulse; }
+  .status-dot-paused  { @apply status-dot bg-cyber-orange; }
+  .status-dot-completed { @apply status-dot bg-cyber-blue; }
+  .status-dot-error   { @apply status-dot bg-cyber-red; }
+  .status-dot-idle    { @apply status-dot bg-cyber-muted-dim; }
+
+  /* ---- Tooltip style ---- */
+  .tooltip-trigger {
+    @apply relative;
+  }
+
+  /* ---- Divider ---- */
+  .divider {
+    @apply h-px bg-gradient-to-r from-transparent via-cyber-border/40 to-transparent;
+  }
+
+  /* ---- Glow effect on hover ---- */
+  .glow-hover {
+    @apply transition-shadow duration-300 hover:shadow-neon;
+  }
+}
+
+/* ============================================
+   Utility Classes
+   ============================================ */
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
   }
 }

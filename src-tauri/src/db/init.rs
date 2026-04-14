@@ -39,7 +39,7 @@ pub fn init_database(conn: &Connection) -> Result<(), Box<dyn std::error::Error>
             status TEXT NOT NULL DEFAULT 'pending',
             scan_mode TEXT NOT NULL,
             config_json TEXT NOT NULL,
-            tld TEXT NOT NULL,
+            tlds TEXT NOT NULL,
             prefix_pattern TEXT,
             total_count INTEGER DEFAULT 0,
             completed_count INTEGER DEFAULT 0,

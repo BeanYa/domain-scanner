@@ -10,14 +10,15 @@ impl<'a> TaskRepo<'a> {
     }
 
     pub fn create(&self, task: &Task) -> Result<(), rusqlite::Error> {
+        let tlds_json = serde_json::to_string(&task.tlds).unwrap_or_else(|_| "[]".to_string());
         self.conn.execute(
-            "INSERT INTO tasks (id, batch_id, name, signature, status, scan_mode, config_json, tld, prefix_pattern, total_count, completed_count, completed_index, available_count, error_count, created_at, updated_at)
+            "INSERT INTO tasks (id, batch_id, name, signature, status, scan_mode, config_json, tlds, prefix_pattern, total_count, completed_count, completed_index, available_count, error_count, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             rusqlite::params![
                 task.id, task.batch_id, task.name, task.signature,
                 serde_json::to_string(&task.status).unwrap(),
                 serde_json::to_string(&task.scan_mode).unwrap(),
-                task.config_json, task.tld, task.prefix_pattern,
+                task.config_json, tlds_json, task.prefix_pattern,
                 task.total_count, task.completed_count, task.completed_index,
                 task.available_count, task.error_count,
                 task.created_at, task.updated_at
@@ -28,7 +29,7 @@ impl<'a> TaskRepo<'a> {
 
     pub fn get_by_id(&self, id: &str) -> Result<Option<Task>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, batch_id, name, signature, status, scan_mode, config_json, tld, prefix_pattern, total_count, completed_count, completed_index, available_count, error_count, created_at, updated_at FROM tasks WHERE id = ?1"
+            "SELECT id, batch_id, name, signature, status, scan_mode, config_json, tlds, prefix_pattern, total_count, completed_count, completed_index, available_count, error_count, created_at, updated_at FROM tasks WHERE id = ?1"
         )?;
         let mut rows = stmt.query([id])?;
         match rows.next()? {
@@ -79,7 +80,7 @@ impl<'a> TaskRepo<'a> {
         offset: i64,
     ) -> Result<Vec<Task>, rusqlite::Error> {
         let mut sql = String::from(
-            "SELECT id, batch_id, name, signature, status, scan_mode, config_json, tld, prefix_pattern, total_count, completed_count, completed_index, available_count, error_count, created_at, updated_at FROM tasks WHERE 1=1"
+            "SELECT id, batch_id, name, signature, status, scan_mode, config_json, tlds, prefix_pattern, total_count, completed_count, completed_index, available_count, error_count, created_at, updated_at FROM tasks WHERE 1=1"
         );
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
@@ -132,12 +133,12 @@ impl<'a> TaskRepo<'a> {
         let mut created = 0u32;
         let mut skipped = 0u32;
         let mut task_ids = Vec::new();
-        let mut skipped_tlds = Vec::new();
+        let mut skipped_signatures = Vec::new();
 
         for task in &tasks {
             if self.signature_exists(&task.signature)? {
                 skipped += 1;
-                skipped_tlds.push(task.tld.clone());
+                skipped_signatures.push(task.signature.clone());
             } else {
                 self.create(task)?;
                 created += 1;
@@ -149,11 +150,18 @@ impl<'a> TaskRepo<'a> {
             created,
             skipped,
             task_ids,
-            skipped_tlds,
+            skipped_signatures,
         })
     }
 
     fn row_to_task(&self, row: &rusqlite::Row) -> Result<Task, rusqlite::Error> {
+        // Deserialize tlds from JSON array string
+        let tlds_raw: String = row.get(7)?;
+        let tlds: Vec<String> = serde_json::from_str(&tlds_raw).unwrap_or_else(|_| {
+            // Backward compat: if it's a single TLD (not JSON), wrap in array
+            if tlds_raw.starts_with('[') { vec![] } else { vec![tlds_raw] }
+        });
+
         Ok(Task {
             id: row.get(0)?,
             batch_id: row.get(1)?,
@@ -162,7 +170,7 @@ impl<'a> TaskRepo<'a> {
             status: serde_json::from_str(&row.get::<_, String>(4)?).unwrap_or(TaskStatus::Pending),
             scan_mode: serde_json::from_str(&row.get::<_, String>(5)?).unwrap_or(ScanMode::Regex { pattern: String::new() }),
             config_json: row.get(6)?,
-            tld: row.get(7)?,
+            tlds,
             prefix_pattern: row.get(8)?,
             total_count: row.get(9)?,
             completed_count: row.get(10)?,
@@ -189,7 +197,7 @@ mod tests {
         (conn, temp)
     }
 
-    fn make_test_task(id: &str, sig: &str, tld: &str) -> Task {
+    fn make_test_task(id: &str, sig: &str, tlds: Vec<&str>) -> Task {
         Task {
             id: id.to_string(),
             batch_id: None,
@@ -198,9 +206,9 @@ mod tests {
             status: TaskStatus::Pending,
             scan_mode: ScanMode::Regex { pattern: "^[a-z]{3}$".to_string() },
             config_json: "{}".to_string(),
-            tld: tld.to_string(),
+            tlds: tlds.iter().map(|s| s.to_string()).collect(),
             prefix_pattern: None,
-            total_count: 17576,
+            total_count: 17576 * tlds.len() as i64,
             completed_count: 0,
             completed_index: 0,
             available_count: 0,
@@ -211,15 +219,29 @@ mod tests {
     }
 
     #[test]
-    fn test_create_and_get_task() {
+    fn test_create_and_get_task_single_tld() {
         let (conn, _temp) = setup();
         let repo = TaskRepo::new(&conn);
-        let task = make_test_task("t1", "sig1", ".com");
+        let task = make_test_task("t1", "sig1", vec![".com"]);
         repo.create(&task).unwrap();
         let fetched = repo.get_by_id("t1").unwrap().unwrap();
         assert_eq!(fetched.id, "t1");
-        assert_eq!(fetched.tld, ".com");
-        assert_eq!(fetched.signature, "sig1");
+        assert_eq!(fetched.tld_count(), 1);
+        assert_eq!(fetched.primary_tld(), ".com");
+        assert_eq!(fetched.tlds, vec![".com"]);
+    }
+
+    #[test]
+    fn test_create_and_get_task_multi_tld() {
+        let (conn, _temp) = setup();
+        let repo = TaskRepo::new(&conn);
+        let task = make_test_task("t1", "sig1", vec![".com", ".net", ".org"]);
+        repo.create(&task).unwrap();
+        let fetched = repo.get_by_id("t1").unwrap().unwrap();
+        assert_eq!(fetched.id, "t1");
+        assert_eq!(fetched.tld_count(), 3);
+        assert_eq!(fetched.primary_tld(), ".com");
+        assert_eq!(fetched.tlds, vec![".com", ".net", ".org"]);
     }
 
     #[test]
@@ -233,11 +255,11 @@ mod tests {
     fn test_signature_uniqueness() {
         let (conn, _temp) = setup();
         let repo = TaskRepo::new(&conn);
-        let task1 = make_test_task("t1", "sig1", ".com");
-        let task2 = make_test_task("t2", "sig1", ".com");
+        let task1 = make_test_task("t1", "sig1", vec![".com"]);
+        let task2 = make_test_task("t2", "sig1", vec![".net"]); // same sig, different tld
         repo.create(&task1).unwrap();
         let result = repo.create(&task2);
-        assert!(result.is_err());
+        assert!(result.is_err()); // UNIQUE constraint on signature
     }
 
     #[test]
@@ -245,7 +267,7 @@ mod tests {
         let (conn, _temp) = setup();
         let repo = TaskRepo::new(&conn);
         assert!(!repo.signature_exists("sig1").unwrap());
-        let task = make_test_task("t1", "sig1", ".com");
+        let task = make_test_task("t1", "sig1", vec![".com"]);
         repo.create(&task).unwrap();
         assert!(repo.signature_exists("sig1").unwrap());
     }
@@ -254,7 +276,7 @@ mod tests {
     fn test_update_status() {
         let (conn, _temp) = setup();
         let repo = TaskRepo::new(&conn);
-        let task = make_test_task("t1", "sig1", ".com");
+        let task = make_test_task("t1", "sig1", vec![".com"]);
         repo.create(&task).unwrap();
         repo.update_status("t1", &TaskStatus::Running).unwrap();
         let fetched = repo.get_by_id("t1").unwrap().unwrap();
@@ -265,7 +287,7 @@ mod tests {
     fn test_update_progress() {
         let (conn, _temp) = setup();
         let repo = TaskRepo::new(&conn);
-        let task = make_test_task("t1", "sig1", ".com");
+        let task = make_test_task("t1", "sig1", vec![".com"]);
         repo.create(&task).unwrap();
         repo.update_progress("t1", 100, 100, 30, 2).unwrap();
         let fetched = repo.get_by_id("t1").unwrap().unwrap();
@@ -279,8 +301,8 @@ mod tests {
     fn test_list_all_tasks() {
         let (conn, _temp) = setup();
         let repo = TaskRepo::new(&conn);
-        repo.create(&make_test_task("t1", "sig1", ".com")).unwrap();
-        repo.create(&make_test_task("t2", "sig2", ".net")).unwrap();
+        repo.create(&make_test_task("t1", "sig1", vec![".com"])).unwrap();
+        repo.create(&make_test_task("t2", "sig2", vec![".net"])).unwrap();
         let tasks = repo.list(None, None, 100, 0).unwrap();
         assert_eq!(tasks.len(), 2);
     }
@@ -289,8 +311,8 @@ mod tests {
     fn test_list_tasks_by_status() {
         let (conn, _temp) = setup();
         let repo = TaskRepo::new(&conn);
-        repo.create(&make_test_task("t1", "sig1", ".com")).unwrap();
-        let mut task2 = make_test_task("t2", "sig2", ".net");
+        repo.create(&make_test_task("t1", "sig1", vec![".com"])).unwrap();
+        let mut task2 = make_test_task("t2", "sig2", vec![".net"]);
         task2.status = TaskStatus::Running;
         repo.create(&task2).unwrap();
         let running = repo.list(Some(&TaskStatus::Running), None, 100, 0).unwrap();
@@ -301,16 +323,15 @@ mod tests {
     #[test]
     fn test_list_tasks_by_batch() {
         let (conn, _temp) = setup();
-        // Create the batch first to satisfy foreign key constraint
         conn.execute(
             "INSERT INTO task_batches (id, name, task_count) VALUES ('batch1', 'Test Batch', 1)",
             [],
         ).unwrap();
         let repo = TaskRepo::new(&conn);
-        let mut t1 = make_test_task("t1", "sig1", ".com");
+        let mut t1 = make_test_task("t1", "sig1", vec![".com"]);
         t1.batch_id = Some("batch1".to_string());
         repo.create(&t1).unwrap();
-        repo.create(&make_test_task("t2", "sig2", ".net")).unwrap();
+        repo.create(&make_test_task("t2", "sig2", vec![".net"])).unwrap();
         let batch_tasks = repo.list(None, Some("batch1"), 100, 0).unwrap();
         assert_eq!(batch_tasks.len(), 1);
         assert_eq!(batch_tasks[0].batch_id, Some("batch1".to_string()));
@@ -321,7 +342,7 @@ mod tests {
         let (conn, _temp) = setup();
         let repo = TaskRepo::new(&conn);
         for i in 0..5 {
-            repo.create(&make_test_task(&format!("t{i}"), &format!("sig{i}"), ".com")).unwrap();
+            repo.create(&make_test_task(&format!("t{i}"), &format!("sig{i}"), vec![".com"])).unwrap();
         }
         let page1 = repo.list(None, None, 2, 0).unwrap();
         let page2 = repo.list(None, None, 2, 2).unwrap();
@@ -334,8 +355,8 @@ mod tests {
         let (conn, _temp) = setup();
         let repo = TaskRepo::new(&conn);
         assert_eq!(repo.count(None).unwrap(), 0);
-        repo.create(&make_test_task("t1", "sig1", ".com")).unwrap();
-        repo.create(&make_test_task("t2", "sig2", ".net")).unwrap();
+        repo.create(&make_test_task("t1", "sig1", vec![".com"])).unwrap();
+        repo.create(&make_test_task("t2", "sig2", vec![".net"])).unwrap();
         assert_eq!(repo.count(None).unwrap(), 2);
         assert_eq!(repo.count(Some(&TaskStatus::Pending)).unwrap(), 2);
     }
@@ -344,7 +365,7 @@ mod tests {
     fn test_delete_task() {
         let (conn, _temp) = setup();
         let repo = TaskRepo::new(&conn);
-        repo.create(&make_test_task("t1", "sig1", ".com")).unwrap();
+        repo.create(&make_test_task("t1", "sig1", vec![".com"])).unwrap();
         repo.delete("t1").unwrap();
         assert!(repo.get_by_id("t1").unwrap().is_none());
     }
@@ -354,8 +375,8 @@ mod tests {
         let (conn, _temp) = setup();
         let repo = TaskRepo::new(&conn);
         let tasks = vec![
-            make_test_task("t1", "sig1", ".com"),
-            make_test_task("t2", "sig2", ".net"),
+            make_test_task("t1", "sig1", vec![".com"]),
+            make_test_task("t2", "sig2", vec![".net"]),
         ];
         let result = repo.batch_create(tasks).unwrap();
         assert_eq!(result.created, 2);
@@ -364,12 +385,12 @@ mod tests {
 
         // Try creating again with same signatures
         let tasks2 = vec![
-            make_test_task("t3", "sig1", ".com"),
-            make_test_task("t4", "sig3", ".org"),
+            make_test_task("t3", "sig1", vec![".com"]),
+            make_test_task("t4", "sig3", vec![".org"]),
         ];
         let result2 = repo.batch_create(tasks2).unwrap();
         assert_eq!(result2.created, 1);
         assert_eq!(result2.skipped, 1);
-        assert!(result2.skipped_tlds.contains(&".com".to_string()));
+        assert!(result2.skipped_signatures.contains(&"sig1".to_string()));
     }
 }

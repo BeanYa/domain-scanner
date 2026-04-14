@@ -184,7 +184,7 @@ mod tests {
             status: TaskStatus::Pending,
             scan_mode: ScanMode::Regex { pattern: "^[a-z]{3}$".to_string() },
             config_json: "{}".to_string(),
-            tld: ".com".to_string(),
+            tlds: vec![".com".to_string()],
             prefix_pattern: None,
             total_count: 100,
             completed_count: 0,
@@ -195,13 +195,13 @@ mod tests {
             updated_at: "2026-01-01T00:00:00".to_string(),
         };
         conn.execute(
-            "INSERT INTO tasks (id, name, signature, status, scan_mode, config_json, tld, total_count, completed_count, completed_index, available_count, error_count, created_at, updated_at)
+            "INSERT INTO tasks (id, name, signature, status, scan_mode, config_json, tlds, total_count, completed_count, completed_index, available_count, error_count, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             rusqlite::params![
                 task.id, task.name, task.signature,
                 serde_json::to_string(&task.status).unwrap(),
                 serde_json::to_string(&task.scan_mode).unwrap(),
-                task.config_json, task.tld, task.total_count,
+                task.config_json, serde_json::to_string(&task.tlds).unwrap(), task.total_count,
                 task.completed_count, task.completed_index,
                 task.available_count, task.error_count,
                 task.created_at, task.updated_at
