@@ -65,9 +65,12 @@ impl GpuDetector {
     /// Check CUDA availability via ONNX Runtime
     #[cfg(feature = "gpu-cuda")]
     fn check_cuda() -> Option<String> {
-        match ort::Session::builder()
-            .with_execution_provider(ort::ExecutionProvider::CUDA(Default::default()))
-            .build_from_memory(&[0u8; 1])
+        use ort::session::Session;
+        match Session::builder()
+            .ok()?
+            .with_execution_providers([ort::ep::CUDA::default().build()])
+            .ok()?
+            .commit_from_memory(&[0u8; 1])
         {
             Ok(_) => Some("NVIDIA GPU (via CUDA)".to_string()),
             Err(_) => None,
@@ -77,9 +80,12 @@ impl GpuDetector {
     /// Check DirectML availability via ONNX Runtime
     #[cfg(feature = "gpu-directml")]
     fn check_directml() -> Option<String> {
-        match ort::Session::builder()
-            .with_execution_provider(ort::ExecutionProvider::DirectML(Default::default()))
-            .build_from_memory(&[0u8; 1])
+        use ort::session::Session;
+        match Session::builder()
+            .ok()?
+            .with_execution_providers([ort::ep::DirectML::default().build()])
+            .ok()?
+            .commit_from_memory(&[0u8; 1])
         {
             Ok(_) => Some("GPU (via DirectML)".to_string()),
             Err(_) => None,
@@ -89,9 +95,12 @@ impl GpuDetector {
     /// Check ROCm availability via ONNX Runtime
     #[cfg(feature = "gpu-rocm")]
     fn check_rocm() -> Option<String> {
-        match ort::Session::builder()
-            .with_execution_provider(ort::ExecutionProvider::ROCm(Default::default()))
-            .build_from_memory(&[0u8; 1])
+        use ort::session::Session;
+        match Session::builder()
+            .ok()?
+            .with_execution_providers([ort::ep::ROCm::default().build()])
+            .ok()?
+            .commit_from_memory(&[0u8; 1])
         {
             Ok(_) => Some("AMD GPU (via ROCm)".to_string()),
             Err(_) => None,
@@ -101,9 +110,12 @@ impl GpuDetector {
     /// Check CoreML availability via ONNX Runtime
     #[cfg(feature = "gpu-coreml")]
     fn check_coreml() -> Option<String> {
-        match ort::Session::builder()
-            .with_execution_provider(ort::ExecutionProvider::CoreML(Default::default()))
-            .build_from_memory(&[0u8; 1])
+        use ort::session::Session;
+        match Session::builder()
+            .ok()?
+            .with_execution_providers([ort::ep::CoreML::default().build()])
+            .ok()?
+            .commit_from_memory(&[0u8; 1])
         {
             Ok(_) => Some("Apple Silicon (via CoreML)".to_string()),
             Err(_) => None,
