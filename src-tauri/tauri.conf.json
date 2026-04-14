@@ -44,7 +44,6 @@
         "languages": ["SimpChinese", "English"],
         "displayLanguageSelector": true,
         "installMode": "both",
-        "allowDowngrades": true,
         "installerHooks": "nsis-hooks.nsh"
       }
     }
