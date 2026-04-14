@@ -9,12 +9,16 @@
     .\deploy.ps1 -GpuMode directml # Non-interactive, use DirectML (AMD on Windows)
     .\deploy.ps1 -GpuMode cpu      # Pure CPU mode, no GPU dependencies
     .\deploy.ps1 -SkipDeps         # Skip npm install, build only
+    .\deploy.ps1 -Target nsis      # Only build NSIS installer
 #>
 
 [CmdletBinding()]
 param(
     [ValidateSet("directml", "cuda", "cpu")]
     [string]$GpuMode = "",
+
+    [ValidateSet("all", "nsis", "msi")]
+    [string]$Target = "all",
 
     [switch]$SkipDeps,
 
@@ -33,6 +37,13 @@ function Write-Err   { param([string]$msg); Write-Host "  [ERR]  $msg" -Foregrou
 function Write-Sep   { Write-Host ("-" * 60) -ForegroundColor DarkGray }
 
 # ============================================================
+# Read version from package.json
+# ============================================================
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$packageJson = Get-Content "$ScriptDir\package.json" -Raw | ConvertFrom-Json
+$AppVersion = $packageJson.version
+
+# ============================================================
 # Banner
 # ============================================================
 Write-Host ""
@@ -44,14 +55,13 @@ Write-Host @"
 ╚██████╗██║  ██║██████╔╝╚██████╔╝██║ ╚████║██║  ██║   ██║      ██║   
  ╚═════╝╚═╝  ╚═╝╚═════╝ ╚═════╝ ╚═╝  ╚═══╝╚═╝  ╚═╝   ╚═╝      ╚═╝   
                                                                          
-              One-Click Deploy for Windows  |  v0.1.0
+              One-Click Deploy for Windows  |  v$AppVersion
 "@ -ForegroundColor Green
 Write-Sep
 
 # ============================================================
 # Project Root Detection
 # ============================================================
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not (Test-Path "$ScriptDir\package.json") -or -not (Test-Path "$ScriptDir\src-tauri\Cargo.toml")) {
     Write-Err "Must run from project root (where package.json and src-tauri/ exist)"
     exit 1
@@ -96,7 +106,6 @@ if ($npmVersion) {
 # Visual Studio Build Tools (needed for Rust compilation)
 $msbuild = ""
 try {
-    # Check for MSVC via cl.exe in common VS paths
     $vsPaths = @(
         "${env:ProgramFiles}\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC",
         "${env:ProgramFiles}\Microsoft Visual Studio\2022\Professional\VC\Tools\MSVC",
@@ -113,6 +122,19 @@ if ($msbuild) {
 } else {
     Write-Warn "Visual Studio Build Tools not confirmed. Rust compilation may fail without C++ build tools."
     Write-Info "Install with: winget install Microsoft.VisualStudio.2022.BuildTools --override '--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended'"
+}
+
+# Check NSIS/WiX tools for Tauri bundler
+$tauriDataDir = "${env:LOCALAPPDATA}\tauri"
+if (Test-Path "$tauriDataDir\NSIS") {
+    Write-Ok "NSIS tools: found"
+} else {
+    Write-Info "NSIS tools: not cached (will be auto-downloaded on first build)"
+}
+if (Test-Path "$tauriDataDir\WiX314") {
+    Write-Ok "WiX tools: found"
+} else {
+    Write-Info "WiX tools: not cached (will be auto-downloaded on first build)"
 }
 
 if ($errors.Count -gt 0) {
@@ -132,8 +154,8 @@ Write-Host "`n>>> Step 2/6: GPU Configuration`n" -ForegroundColor Magenta
 if (-not $GpuMode) {
     Write-Host "Select GPU acceleration mode:`n" -ForegroundColor White
     Write-Host "  [1] DirectML  - AMD/Intel GPUs on Windows (recommended for AMD 5700XT)"
-    Write-Host "  [2] CUDA       - NVIDIA GPUs only"
-    Write-Host "  [3] CPU-only   - No GPU dependency, uses remote Embedding API"
+    Write-Host "  [2] CUDA      - NVIDIA GPUs only"
+    Write-Host "  [3] CPU-only  - No GPU dependency, uses remote Embedding API"
     Write-Host ""
     $choice = Read-Host "Enter choice (1-3) [default: 1]"
     switch ($choice) {
@@ -144,17 +166,21 @@ if (-not $GpuMode) {
 }
 
 $cargoFeatures = ""
+$gpuLabel = ""
 switch ($GpuMode) {
     "directml" {
         $cargoFeatures = "--features gpu-directml"
+        $gpuLabel = "DirectML"
         Write-Ok "GPU mode: DirectML (AMD/Intel Windows)"
     }
     "cuda" {
         $cargoFeatures = "--features gpu-cuda"
+        $gpuLabel = "CUDA"
         Write-Ok "GPU mode: CUDA (NVIDIA)"
     }
     "cpu" {
         $cargoFeatures = ""
+        $gpuLabel = "CPU"
         Write-Ok "GPU mode: CPU-only (no local GPU inference)"
     }
 }
@@ -195,12 +221,16 @@ if ($iconMissing.Count -gt 0) {
     $iconMissing | ForEach-Object { Write-Warn "  - $_" }
     Write-Info "Generating placeholder icons..."
     New-Item -ItemType Directory -Path "src-tauri\icons" -Force | Out-Null
-    # Note: Tauri can auto-generate from a single icon if tauri icon command is available
     if (Get-Command npx -ErrorAction SilentlyContinue) {
         Push-Location src-tauri
         try { npx tauri icon --help 2>$null | Out-Null } catch {}
         Pop-Location
     }
+}
+
+# Validate NSIS hooks exist
+if (-not (Test-Path "src-tauri\nsis-hooks.nsh")) {
+    Write-Warn "NSIS hooks file not found: src-tauri/nsis-hooks.nsh"
 }
 
 # Quick compile check to catch errors early
@@ -225,6 +255,13 @@ Write-Host "`n>>> Step 5/6: Building Application`n" -ForegroundColor Magenta
 
 $buildArgs = @("tauri", "build")
 if ($cargoFeatures) { $buildArgs += $cargoFeatures.Split(" ") }
+
+# Add bundle target
+switch ($Target) {
+    "nsis" { $buildArgs += @("--bundles", "nsis") }
+    "msi"  { $buildArgs += @("--bundles", "msi") }
+    # "all" is default, no extra args needed
+}
 
 Write-Info "Build command: npm run $(($buildArgs -join ' '))"
 Write-Info "This will take several minutes...`n"
@@ -251,7 +288,7 @@ if ($buildCode -ne 0) {
 Write-Ok "Build completed in $($sw.Elapsed.ToString('mm\:ss'))"
 
 # ============================================================
-# 6. Collect Artifacts
+# 6. Collect Artifacts + SHA256 Checksums
 # ============================================================
 Write-Host "`n>>> Step 6/6: Collect Artifacts`n" -ForegroundColor Magenta
 
@@ -260,29 +297,61 @@ $releaseDir = "$ScriptDir\releases"
 New-Item -ItemType Directory -Path $releaseDir -Force | Out-Null
 
 $artifacts = @()
-$nsisExe = Get-ChildItem -Path "$bundleDir\nsis\*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-$msiFile = Get-ChildItem -Path "$bundleDir\msi\*.msi" -ErrorAction SilentlyContinue | Select-Object -First 1
-$exeFile = Get-ChildItem -Path "src-tauri\target\release\domain_scanner_app.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
 
+# Collect NSIS installer
+$nsisExe = Get-ChildItem -Path "$bundleDir\nsis\*-setup.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($nsisExe) {
-    $destNsis = "$releaseDir\$($nsisExe.Name)"
+    # Rename with GPU variant suffix
+    $newName = $nsisExe.Name -replace '-setup\.exe$', "_${gpuLabel}-setup.exe"
+    $destNsis = "$releaseDir\$newName"
     Copy-Item $nsisExe.FullName $destNsis -Force
-    $artifacts += @{ Name = $nsisExe.Name; Size = [math]::Round($nsisExe.Length / 1MB, 1); Path = $destNsis }
-    Write-Ok "NSIS installer: $($nsisExe.Name) ($([math]::Round($nsisExe.Length / 1MB)) MB)"
+    $size = [math]::Round($nsisExe.Length / 1MB, 1)
+    $artifacts += @{ Name = $newName; Size = $size; Path = $destNsis }
+    Write-Ok "NSIS installer: $newName ($size MB)"
+} elseif ($Target -eq "nsis" -or $Target -eq "all") {
+    Write-Warn "NSIS installer not found in $bundleDir\nsis\"
 }
 
+# Collect MSI package
+$msiFile = Get-ChildItem -Path "$bundleDir\msi\*.msi" -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($msiFile) {
-    $destMsi = "$releaseDir\$($msiFile.Name)"
+    $newName = $msiFile.Name -replace '_x64\.msi$', "_x64_${gpuLabel}.msi"
+    $destMsi = "$releaseDir\$newName"
     Copy-Item $msiFile.FullName $destMsi -Force
-    $artifacts += @{ Name = $msiFile.Name; Size = [math]::Round($msiFile.Length / 1MB, 1); Path = $destMsi }
-    Write-Ok "MSI package: $($msiFile.Name) ($([math]::Round($msiFile.Length / 1MB)) MB)"
+    $size = [math]::Round($msiFile.Length / 1MB, 1)
+    $artifacts += @{ Name = $newName; Size = $size; Path = $destMsi }
+    Write-Ok "MSI package: $newName ($size MB)"
+} elseif ($Target -eq "msi" -or $Target -eq "all") {
+    Write-Warn "MSI package not found in $bundleDir\msi\"
 }
 
+# Portable exe (optional)
+$exeFile = Get-ChildItem -Path "src-tauri\target\release\domain_scanner_app.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($exeFile -and $PortableOnly) {
     $portableDir = "$releaseDir\portable"
     New-Item -ItemType Directory -Path $portableDir -Force | Out-Null
     Copy-Item $exeFile.FullName "$portableDir\Domain Scanner.exe" -Force
     Write-Ok "Portable exe: Domain Scanner.exe ($([math]::Round($exeFile.Length / 1MB)) MB)"
+}
+
+# Generate SHA256 checksums
+if ($artifacts.Count -gt 0) {
+    Write-Info "Generating SHA256 checksums..."
+    $checksumFile = "$releaseDir\SHA256SUMS.txt"
+    $checksums = @()
+    foreach ($a in $artifacts) {
+        $hash = (Get-FileHash -Path $a.Path -Algorithm SHA256).Hash.ToLower()
+        $checksums += "$hash  $($a.Name)"
+        Write-Host "  $hash  $($a.Name)" -ForegroundColor Gray
+    }
+    Set-Content -Path $checksumFile -Value ($checksums -join "`n") -Encoding UTF8
+    Write-Ok "Checksums saved to SHA256SUMS.txt"
+}
+
+# Validate artifacts
+if ($artifacts.Count -eq 0) {
+    Write-Err "No build artifacts found! Check build output for errors."
+    exit 1
 }
 
 Write-Sep
@@ -309,7 +378,8 @@ if ($GpuMode -eq "cpu") {
 # ============================================================
 Write-Sep
 Write-Host "Build Summary:`n" -ForegroundColor White
-Write-Host "  Product : Domain Scanner v0.1.0" 
-Write-Host "  GPU     : $(if ($GpuMode) { $GpuMode.ToUpper() } else { 'Default' })"
+Write-Host "  Product : Domain Scanner v$AppVersion"
+Write-Host "  GPU     : $gpuLabel"
+Write-Host "  Target  : $Target"
 Write-Host "  Time    : $($sw.Elapsed.ToString('mm\:ss'))"
 Write-Host "  Output  : $releaseDir`n"

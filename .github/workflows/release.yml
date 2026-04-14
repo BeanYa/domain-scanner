@@ -1,0 +1,178 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      gpu_variant:
+        description: 'GPU variant to build (all / directml / cuda / cpu)'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - directml
+          - cuda
+          - cpu
+
+jobs:
+  # ──────────────────────────────────────────────
+  # Build Matrix: 3 GPU variants in parallel
+  # ──────────────────────────────────────────────
+  build:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: directml
+            label: AMD / Intel GPU (DirectML)
+            cargo_features: --features gpu-directml
+            artifact_suffix: DirectML
+          - variant: cuda
+            label: NVIDIA GPU (CUDA)
+            cargo_features: --features gpu-cuda
+            artifact_suffix: CUDA
+          - variant: cpu
+            label: CPU Only (Remote API)
+            cargo_features: ""
+            artifact_suffix: CPU
+
+    name: Windows ${{ matrix.artifact_suffix }}
+    runs-on: windows-latest
+    if: >
+      github.event_name == 'push' ||
+      inputs.gpu_variant == 'all' ||
+      inputs.gpu_variant == matrix.variant
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+          key: ${{ matrix.variant }}
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build and release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: v__VERSION__
+          releaseName: 'Domain Scanner v__VERSION__'
+          releaseBody: |
+            ## Domain Scanner v__VERSION__
+
+            ### Download Guide
+            | File | GPU Variant | Target Users |
+            |------|-------------|-------------|
+            | `*_DirectML-setup.exe` | AMD / Intel GPU | AMD Radeon, Intel Arc on Windows |
+            | `*_CUDA-setup.exe` | NVIDIA GPU | NVIDIA GeForce / RTX on Windows |
+            | `*_CPU-setup.exe` | CPU Only | No local GPU, uses remote Embedding API |
+
+            > **Note**: NSIS installer (`.exe`) is recommended. MSI is for enterprise deployment.
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.cargo_features }}
+          retryAttempts: 2
+
+      - name: Rename artifacts with GPU variant suffix
+        shell: pwsh
+        run: |
+          $bundleDir = "src-tauri\target\release\bundle"
+          $suffix = "${{ matrix.artifact_suffix }}"
+          
+          # Rename NSIS installer
+          Get-ChildItem -Path "$bundleDir\nsis\*-setup.exe" -ErrorAction SilentlyContinue | ForEach-Object {
+            $newName = $_.Name -replace '-setup\.exe$', "_${suffix}-setup.exe"
+            Rename-Item $_.FullName $newName -Force
+            Write-Host "Renamed: $($_.Name) -> $newName"
+          }
+          
+          # Rename MSI
+          Get-ChildItem -Path "$bundleDir\msi\*.msi" -ErrorAction SilentlyContinue | ForEach-Object {
+            $newName = $_.Name -replace '_x64\.msi$', "_x64_${suffix}.msi"
+            Rename-Item $_.FullName $newName -Force
+            Write-Host "Renamed: $($_.Name) -> $newName"
+          }
+
+      - name: Upload renamed artifacts to release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $bundleDir = "src-tauri\target\release\bundle"
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          $tag = "v${version}"
+          
+          # Find the release
+          $release = gh release view $tag --json id,uploadUrl -q ".id" 2>$null
+          if (-not $release) {
+            Write-Host "Release $tag not found, tauri-action should have created it."
+            return
+          }
+          
+          # Upload NSIS installer
+          Get-ChildItem -Path "$bundleDir\nsis\*${{ matrix.artifact_suffix }}*-setup.exe" -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Host "Uploading: $($_.Name)"
+            gh release upload $tag $_.FullName --clobber
+          }
+          
+          # Upload MSI
+          Get-ChildItem -Path "$bundleDir\msi\*${{ matrix.artifact_suffix }}*.msi" -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Host "Uploading: $($_.Name)"
+            gh release upload $tag $_.FullName --clobber
+          }
+
+  # ──────────────────────────────────────────────
+  # Generate SHA256 checksums after all builds
+  # ──────────────────────────────────────────────
+  checksums:
+    name: Generate Checksums
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    if: always() && needs.build.result != 'failed'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate SHA256 checksums
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version=$(jq -r .version package.json)
+          tag="v${version}"
+          
+          # Download all release assets
+          mkdir -p assets
+          cd assets
+          gh release download $tag
+          
+          # Generate checksums
+          sha256sum * > ../SHA256SUMS.txt
+          cd ..
+          cat SHA256SUMS.txt
+          
+          # Upload checksums
+          gh release upload $tag SHA256SUMS.txt --clobber
