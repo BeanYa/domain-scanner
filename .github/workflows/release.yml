@@ -141,11 +141,11 @@ jobs:
           $version = (Get-Content package.json | ConvertFrom-Json).version
           $tag = "v${version}"
           
-          # Find the release
+          # Find the release (fail if not found)
           $release = gh release view $tag --json id,uploadUrl -q ".id" 2>$null
           if (-not $release) {
-            Write-Host "Release $tag not found, tauri-action should have created it."
-            return
+            Write-Error "Release $tag not found — tauri-action should have created it. Did the build succeed?"
+            exit 1
           }
           
           # Upload NSIS installer
@@ -182,16 +182,31 @@ jobs:
         run: |
           version=$(jq -r .version package.json)
           tag="v${version}"
-          
+
+          # Verify release exists
+          if ! gh release view "$tag" > /dev/null 2>&1; then
+            echo "::warning::Release $tag not found — skipping checksum generation"
+            exit 0
+          fi
+
           # Download all release assets
           mkdir -p assets
           cd assets
-          gh release download $tag
-          
+          gh release download "$tag"
+
+          # Check if any assets were downloaded
+          shopt -s nullglob
+          files=(*)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::warning::No assets in release $tag — skipping checksum generation"
+            cd ..
+            exit 0
+          fi
+
           # Generate checksums
           sha256sum * > ../SHA256SUMS.txt
           cd ..
           cat SHA256SUMS.txt
-          
+
           # Upload checksums
-          gh release upload $tag SHA256SUMS.txt --clobber
+          gh release upload "$tag" SHA256SUMS.txt --clobber
