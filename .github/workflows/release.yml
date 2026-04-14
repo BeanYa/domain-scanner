@@ -19,34 +19,53 @@ on:
 
 jobs:
   # ──────────────────────────────────────────────
-  # Build Matrix: 3 GPU variants in parallel
+  # Prepare: dynamically build matrix based on trigger
+  # ──────────────────────────────────────────────
+  prepare:
+    name: Prepare Build Matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Set build matrix
+        id: set-matrix
+        shell: bash
+        run: |
+          # All available variants
+          all='[{"variant":"directml","label":"AMD / Intel GPU (DirectML)","cargo_features":"--features gpu-directml","artifact_suffix":"DirectML"},{"variant":"cuda","label":"NVIDIA GPU (CUDA)","cargo_features":"--features gpu-cuda","artifact_suffix":"CUDA"},{"variant":"cpu","label":"CPU Only (Remote API)","cargo_features":"","artifact_suffix":"CPU"}]'
+
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "matrix=${all}" >> $GITHUB_OUTPUT
+            echo "Building all variants (tag push)"
+          elif [ "${{ inputs.gpu_variant }}" = "all" ] || [ -z "${{ inputs.gpu_variant }}" ]; then
+            echo "matrix=${all}" >> $GITHUB_OUTPUT
+            echo "Building all variants (manual - all)"
+          else
+            # Filter single variant
+            filtered=$(echo "${all}" | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          variant = '${{ inputs.gpu_variant }}'
+          matched = [v for v in data if v['variant'] == variant]
+          print(json.dumps(matched))
+          ")
+            echo "matrix=${filtered}" >> $GITHUB_OUTPUT
+            echo "Building variant: ${{ inputs.gpu_variant }}"
+          fi
+
+  # ──────────────────────────────────────────────
+  # Build Matrix: GPU variants in parallel
   # ──────────────────────────────────────────────
   build:
+    needs: prepare
     permissions:
       contents: write
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - variant: directml
-            label: AMD / Intel GPU (DirectML)
-            cargo_features: --features gpu-directml
-            artifact_suffix: DirectML
-          - variant: cuda
-            label: NVIDIA GPU (CUDA)
-            cargo_features: --features gpu-cuda
-            artifact_suffix: CUDA
-          - variant: cpu
-            label: CPU Only (Remote API)
-            cargo_features: ""
-            artifact_suffix: CPU
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
 
     name: Windows ${{ matrix.artifact_suffix }}
     runs-on: windows-latest
-    if: >
-      github.event_name == 'push' ||
-      inputs.gpu_variant == 'all' ||
-      inputs.gpu_variant == matrix.variant
 
     steps:
       - name: Checkout repository
