@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, Fragment } from "react";
 import { Zap, Regex, Type, Brain, List, ChevronRight, CheckCircle, AlertTriangle, Sparkles } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
@@ -88,14 +88,14 @@ export default function NewTask() {
       {/* Step Indicator */}
       <div className="flex items-center gap-3 px-1">
         {[1, 2, 3].map((step) => (
-          <React.Fragment key={step}>
+          <Fragment key={step}>
             {step > 1 && <div className={`h-[2px] flex-1 rounded-full ${step <= 3 ? "bg-cyber-green/30" : "bg-cyber-border/40"}`} />}
             <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
               step <= 3 ? "bg-cyber-green/10 text-cyber-green border border-cyber-green/20" : "bg-cyber-surface text-cyber-muted-dim"
             }`}>
               步骤 {step}
             </div>
-          </React.Fragment>
+          </Fragment>
         ))}
       </div>
 

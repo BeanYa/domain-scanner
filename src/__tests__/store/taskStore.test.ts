@@ -48,7 +48,7 @@ describe("taskStore", () => {
         status: "pending",
         scan_mode: { type: "regex", pattern: "^[a-z]{3}$" },
         config_json: "{}",
-        tld: ".com",
+        tlds: [".com"],
         prefix_pattern: null,
         total_count: 100,
         completed_count: 0,
@@ -57,6 +57,7 @@ describe("taskStore", () => {
         error_count: 0,
         created_at: "2026-01-01",
         updated_at: "2026-01-01",
+        primaryTld() { return this.tlds[0]; },
       },
       {
         id: "task-2",
@@ -66,7 +67,7 @@ describe("taskStore", () => {
         status: "running",
         scan_mode: { type: "regex", pattern: "^[a-z]{4}$" },
         config_json: "{}",
-        tld: ".net",
+        tlds: [".net"],
         prefix_pattern: null,
         total_count: 200,
         completed_count: 50,
@@ -75,6 +76,7 @@ describe("taskStore", () => {
         error_count: 1,
         created_at: "2026-01-01",
         updated_at: "2026-01-01",
+        primaryTld() { return this.tlds[0]; },
       },
     ];
 

@@ -15,7 +15,8 @@
     "noUnusedParameters": false,
     "noFallthroughCasesInSwitch": true,
     "forceConsistentCasingInFileNames": true,
-    "verbatimModuleSyntax": false
+    "verbatimModuleSyntax": false,
+    "types": ["node"]
   },
   "include": ["vite.config.ts", "vitest.config.ts", "tailwind.config.js", "postcss.config.js"]
 }
