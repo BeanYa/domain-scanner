@@ -62,7 +62,8 @@ impl<'a> FilterRepo<'a> {
         let mut sql = String::from(
             "SELECT id, task_id, domain, filter_type, filter_pattern, is_matched, score, embedding_id FROM filtered_results WHERE task_id = ?1"
         );
-        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(task_id.to_string())];
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> =
+            vec![Box::new(task_id.to_string())];
 
         if let Some(ft) = filter_type {
             sql.push_str(" AND filter_type = ?");
@@ -75,7 +76,8 @@ impl<'a> FilterRepo<'a> {
         param_values.push(Box::new(limit));
         param_values.push(Box::new(offset));
 
-        let params: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
         let mut stmt = self.conn.prepare(&sql)?;
         let results = stmt
             .query_map(params.as_slice(), |row| {
@@ -113,7 +115,8 @@ impl<'a> FilterRepo<'a> {
     }
 
     pub fn delete_by_task(&self, task_id: &str) -> Result<(), rusqlite::Error> {
-        self.conn.execute("DELETE FROM filtered_results WHERE task_id = ?1", [task_id])?;
+        self.conn
+            .execute("DELETE FROM filtered_results WHERE task_id = ?1", [task_id])?;
         Ok(())
     }
 }
@@ -140,10 +143,14 @@ mod tests {
             name: "Test".to_string(),
             signature: "sig1".to_string(),
             status: TaskStatus::Pending,
-            scan_mode: ScanMode::Regex { pattern: "^[a-z]{3}$".to_string() },
+            scan_mode: ScanMode::Regex {
+                pattern: "^[a-z]{3}$".to_string(),
+            },
             config_json: "{}".to_string(),
             tlds: vec![".com".to_string()],
             prefix_pattern: None,
+            concurrency: 50,
+            proxy_id: None,
             total_count: 100,
             completed_count: 0,
             completed_index: 0,
@@ -167,7 +174,13 @@ mod tests {
         ).unwrap();
     }
 
-    fn make_result(task_id: &str, domain: &str, ftype: &str, matched: bool, score: Option<f64>) -> FilteredResult {
+    fn make_result(
+        task_id: &str,
+        domain: &str,
+        ftype: &str,
+        matched: bool,
+        score: Option<f64>,
+    ) -> FilteredResult {
         FilteredResult {
             id: 0,
             task_id: task_id.to_string(),
@@ -185,8 +198,10 @@ mod tests {
         let (conn, _temp) = setup();
         create_test_task(&conn);
         let repo = FilterRepo::new(&conn);
-        repo.create(&make_result("task1", "abc.com", "exact", true, None)).unwrap();
-        repo.create(&make_result("task1", "def.com", "exact", false, None)).unwrap();
+        repo.create(&make_result("task1", "abc.com", "exact", true, None))
+            .unwrap();
+        repo.create(&make_result("task1", "def.com", "exact", false, None))
+            .unwrap();
         let results = repo.list_by_task("task1", None, false, 100, 0).unwrap();
         assert_eq!(results.len(), 2);
     }
@@ -208,8 +223,10 @@ mod tests {
         let (conn, _temp) = setup();
         create_test_task(&conn);
         let repo = FilterRepo::new(&conn);
-        repo.create(&make_result("task1", "abc.com", "exact", true, None)).unwrap();
-        repo.create(&make_result("task1", "def.com", "exact", false, None)).unwrap();
+        repo.create(&make_result("task1", "abc.com", "exact", true, None))
+            .unwrap();
+        repo.create(&make_result("task1", "def.com", "exact", false, None))
+            .unwrap();
         let matched = repo.list_by_task("task1", None, true, 100, 0).unwrap();
         assert_eq!(matched.len(), 1);
         assert_eq!(matched[0].domain, "abc.com");
@@ -220,9 +237,19 @@ mod tests {
         let (conn, _temp) = setup();
         create_test_task(&conn);
         let repo = FilterRepo::new(&conn);
-        repo.create(&make_result("task1", "abc.com", "exact", true, None)).unwrap();
-        repo.create(&make_result("task1", "def.com", "semantic", true, Some(0.95))).unwrap();
-        let exact = repo.list_by_task("task1", Some("exact"), false, 100, 0).unwrap();
+        repo.create(&make_result("task1", "abc.com", "exact", true, None))
+            .unwrap();
+        repo.create(&make_result(
+            "task1",
+            "def.com",
+            "semantic",
+            true,
+            Some(0.95),
+        ))
+        .unwrap();
+        let exact = repo
+            .list_by_task("task1", Some("exact"), false, 100, 0)
+            .unwrap();
         assert_eq!(exact.len(), 1);
         assert_eq!(exact[0].filter_type, "exact");
     }
@@ -232,8 +259,10 @@ mod tests {
         let (conn, _temp) = setup();
         create_test_task(&conn);
         let repo = FilterRepo::new(&conn);
-        repo.create(&make_result("task1", "abc.com", "exact", true, None)).unwrap();
-        repo.create(&make_result("task1", "def.com", "exact", false, None)).unwrap();
+        repo.create(&make_result("task1", "abc.com", "exact", true, None))
+            .unwrap();
+        repo.create(&make_result("task1", "def.com", "exact", false, None))
+            .unwrap();
         assert_eq!(repo.count_by_task("task1", false).unwrap(), 2);
         assert_eq!(repo.count_by_task("task1", true).unwrap(), 1);
     }
@@ -243,7 +272,8 @@ mod tests {
         let (conn, _temp) = setup();
         create_test_task(&conn);
         let repo = FilterRepo::new(&conn);
-        repo.create(&make_result("task1", "abc.com", "exact", true, None)).unwrap();
+        repo.create(&make_result("task1", "abc.com", "exact", true, None))
+            .unwrap();
         repo.delete_by_task("task1").unwrap();
         assert_eq!(repo.count_by_task("task1", false).unwrap(), 0);
     }

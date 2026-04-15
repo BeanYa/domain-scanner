@@ -48,6 +48,8 @@ pub struct Task {
     pub tlds: Vec<String>,
     /// Original prefix pattern for display
     pub prefix_pattern: Option<String>,
+    pub concurrency: i64,
+    pub proxy_id: Option<i64>,
     pub total_count: i64,
     pub completed_count: i64,
     pub completed_index: i64,
@@ -85,6 +87,21 @@ pub struct BatchCreateResult {
     pub skipped: u32,
     pub task_ids: Vec<String>,
     pub skipped_signatures: Vec<String>,
+}
+
+/// One execution record of a task
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskRun {
+    pub id: String,
+    pub task_id: String,
+    pub run_number: i64,
+    pub status: TaskStatus,
+    pub total_count: i64,
+    pub completed_count: i64,
+    pub available_count: i64,
+    pub error_count: i64,
+    pub started_at: String,
+    pub finished_at: Option<String>,
 }
 
 #[cfg(test)]
@@ -135,6 +152,8 @@ mod tests {
             config_json: "{}".to_string(),
             tlds: vec![".com".to_string(), ".net".to_string()],
             prefix_pattern: Some("3-letter".to_string()),
+            concurrency: 50,
+            proxy_id: None,
             total_count: 35152, // 17576 * 2 TLDs
             completed_count: 0,
             completed_index: 0,
@@ -162,10 +181,14 @@ mod tests {
             name: "Single TLD Task".to_string(),
             signature: "sig1".to_string(),
             status: TaskStatus::Running,
-            scan_mode: ScanMode::Manual { domains: vec!["test".to_string()] },
+            scan_mode: ScanMode::Manual {
+                domains: vec!["test".to_string()],
+            },
             config_json: "{}".to_string(),
             tlds: vec![".com".to_string()],
             prefix_pattern: None,
+            concurrency: 50,
+            proxy_id: None,
             total_count: 1,
             completed_count: 0,
             completed_index: 0,

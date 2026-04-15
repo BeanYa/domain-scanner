@@ -6,7 +6,7 @@ use serde::Deserialize;
 
 #[tauri::command]
 pub fn get_gpu_status() -> Result<String, String> {
-    let conn = init::open_and_init(":memory:").map_err(|e| e.to_string())?;
+    let conn = init::open_db().map_err(|e| e.to_string())?;
     let repo = GpuRepo::new(&conn);
 
     // Get stored config or default
@@ -35,7 +35,7 @@ pub struct UpdateGpuConfigRequest {
 
 #[tauri::command]
 pub fn update_gpu_config(request: UpdateGpuConfigRequest) -> Result<(), String> {
-    let conn = init::open_and_init(":memory:").map_err(|e| e.to_string())?;
+    let conn = init::open_db().map_err(|e| e.to_string())?;
     let repo = GpuRepo::new(&conn);
 
     let mut config = repo.get_config().map_err(|e| e.to_string())?;
@@ -68,7 +68,10 @@ pub fn update_gpu_config(request: UpdateGpuConfigRequest) -> Result<(), String> 
     // Verify the selected backend is available
     let status = GpuDetector::select_backend(&config);
     if !status.available && config.backend != GpuBackend::Auto {
-        return Err(format!("GPU backend {:?} is not available on this system", config.backend));
+        return Err(format!(
+            "GPU backend {:?} is not available on this system",
+            config.backend
+        ));
     }
 
     repo.update_config(&config).map_err(|e| e.to_string())?;

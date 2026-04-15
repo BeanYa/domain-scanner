@@ -14,10 +14,13 @@ impl<'a> VectorRepo<'a> {
 
     /// Insert a single embedding vector for a domain
     pub fn insert(&self, domain_id: i64, embedding: &[f32]) -> Result<(), rusqlite::Error> {
-        assert_eq!(embedding.len(), EMBEDDING_DIM, "Embedding dimension must be {}", EMBEDDING_DIM);
-        let embedding_bytes: Vec<u8> = embedding.iter()
-            .flat_map(|f| f.to_le_bytes())
-            .collect();
+        assert_eq!(
+            embedding.len(),
+            EMBEDDING_DIM,
+            "Embedding dimension must be {}",
+            EMBEDDING_DIM
+        );
+        let embedding_bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
         self.conn.execute(
             "INSERT INTO domain_vectors(domain_id, domain_embedding) VALUES (?1, ?2)",
             rusqlite::params![domain_id, embedding_bytes],
@@ -31,9 +34,7 @@ impl<'a> VectorRepo<'a> {
         let mut count = 0;
         for (domain_id, embedding) in items {
             assert_eq!(embedding.len(), EMBEDDING_DIM);
-            let embedding_bytes: Vec<u8> = embedding.iter()
-                .flat_map(|f| f.to_le_bytes())
-                .collect();
+            let embedding_bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
             tx.execute(
                 "INSERT INTO domain_vectors(domain_id, domain_embedding) VALUES (?1, ?2)",
                 rusqlite::params![domain_id, embedding_bytes],
@@ -52,7 +53,8 @@ impl<'a> VectorRepo<'a> {
         limit: i64,
     ) -> Result<Vec<(i64, f32)>, rusqlite::Error> {
         assert_eq!(query_embedding.len(), EMBEDDING_DIM);
-        let query_bytes: Vec<u8> = query_embedding.iter()
+        let query_bytes: Vec<u8> = query_embedding
+            .iter()
             .flat_map(|f| f.to_le_bytes())
             .collect();
 
@@ -80,11 +82,8 @@ impl<'a> VectorRepo<'a> {
 
     /// Count total vectors
     pub fn count(&self) -> Result<i64, rusqlite::Error> {
-        self.conn.query_row(
-            "SELECT COUNT(*) FROM domain_vectors",
-            [],
-            |row| row.get(0),
-        )
+        self.conn
+            .query_row("SELECT COUNT(*) FROM domain_vectors", [], |row| row.get(0))
     }
 
     /// Check if a domain has a vector
@@ -113,7 +112,9 @@ mod tests {
     }
 
     fn make_embedding(seed: f32) -> Vec<f32> {
-        (0..EMBEDDING_DIM).map(|i| seed + i as f32 * 0.001).collect()
+        (0..EMBEDDING_DIM)
+            .map(|i| seed + i as f32 * 0.001)
+            .collect()
     }
 
     #[test]

@@ -1,3 +1,3 @@
 pub mod client;
-pub mod providers;
 pub mod prompts;
+pub mod providers;

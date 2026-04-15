@@ -1,8 +1,9 @@
-import { useState, Fragment } from "react";
-import { Zap, Regex, Type, Brain, List, ChevronRight, CheckCircle, AlertTriangle, Sparkles, Globe, Search } from "lucide-react";
+import { useState, useEffect, Fragment } from "react";
+import { Zap, Regex, Type, Brain, List, ChevronRight, CheckCircle, AlertTriangle, Sparkles, Globe, Search, Settings, Shield, Gauge } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { TLD_LIST, POPULAR_TLDS, TLDS_BY_CATEGORY, type TldCategory } from "../data/tlds";
 import { useTaskStore } from "../store/taskStore";
+import { useProxyStore } from "../store/proxyStore";
 import type { ScanMode } from "../types";
 
 type ScanTab = "regex" | "llm" | "manual";
@@ -28,8 +29,14 @@ export default function NewTask() {
   const [error, setError] = useState<string | null>(null);
   const [tldView, setTldView] = useState<TldView>("popular");
   const [tldSearch, setTldSearch] = useState("");
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [concurrency, setConcurrency] = useState(50);
+  const [selectedProxyId, setSelectedProxyId] = useState<number | undefined>(undefined);
   const navigate = useNavigate();
-  const { createTasks } = useTaskStore();
+  const { createTasks, startTask, fetchTasks } = useTaskStore();
+  const { proxies, fetchProxies } = useProxyStore();
+
+  useEffect(() => { fetchProxies(); }, []);
 
   const tabs: { key: ScanTab; label: string; icon: typeof Regex; desc: string }[] = [
     { key: "regex", label: "正则 / 通配符", icon: Regex, desc: "用正则表达式或通配符生成域名前缀列表" },
@@ -87,7 +94,14 @@ export default function NewTask() {
 
       const name = taskName || `${activeTab === "regex" ? "正则扫描" : activeTab === "llm" ? "LLM扫描" : "手动扫描"} ${selectedTlds.join("/")}`;
 
-      await createTasks(name, scanMode, selectedTlds);
+      const result = await createTasks(name, scanMode, selectedTlds, undefined, concurrency, selectedProxyId);
+      const createdCount = result.created ?? 0;
+      const taskId = result.task_ids[0];
+      if (createdCount === 0 || !taskId) {
+        throw new Error("任务未创建：相同扫描配置可能已存在，请先删除旧任务或清空数据库后重试。");
+      }
+      await startTask(taskId);
+      await fetchTasks();
       setCreated(true);
       setTimeout(() => navigate("/tasks"), 1500);
     } catch (e) {
@@ -367,6 +381,69 @@ export default function NewTask() {
               <p className="text-[11px] text-cyber-muted-dim mt-1">
                 所有 TLD 将合并为单个任务，统一管理与进度追踪
               </p>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* Advanced Settings */}
+      <section className="glass-panel overflow-hidden">
+        <div
+          className="px-5 py-4 flex items-center justify-between cursor-pointer hover:bg-cyber-card/20 transition-colors"
+          onClick={() => setShowAdvanced(!showAdvanced)}
+        >
+          <label className="flex items-center gap-2 text-sm font-semibold text-cyber-text cursor-pointer">
+            <Settings className="w-4 h-4 text-cyber-muted" /> 高级设置
+          </label>
+          <ChevronRight className={`w-4 h-4 text-cyber-muted transition-transform ${showAdvanced ? "rotate-90" : ""}`} />
+        </div>
+        {showAdvanced && (
+          <div className="px-5 pb-5 pt-0 grid grid-cols-2 gap-5 border-t border-cyber-border/20">
+            <div className="pt-4">
+              <label className="flex items-center gap-2 text-xs text-cyber-muted mb-2">
+                <Shield className="w-3.5 h-3.5" /> 代理选择
+              </label>
+              <select
+                className="cyber-input w-full text-sm"
+                value={selectedProxyId ?? ""}
+                onChange={(e) => setSelectedProxyId(e.target.value ? Number(e.target.value) : undefined)}
+              >
+                <option value="">不使用代理（直连）</option>
+                {proxies.filter(p => p.is_active).map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name || p.url} ({p.proxy_type.toUpperCase()})
+                    {p.username ? ` [${p.username}]` : ""}
+                  </option>
+                ))}
+              </select>
+              {proxies.filter(p => p.is_active).length === 0 && (
+                <p className="text-[10px] text-cyber-muted-dim mt-1.5">暂无可用代理，前往「代理管理」添加</p>
+              )}
+            </div>
+            <div className="pt-4">
+              <label className="flex items-center gap-2 text-xs text-cyber-muted mb-2">
+                <Gauge className="w-3.5 h-3.5" /> 并发数
+                <span className="text-cyber-green font-mono font-bold">{concurrency}</span>
+              </label>
+              <input
+                type="range"
+                min={1}
+                max={500}
+                value={concurrency}
+                onChange={(e) => setConcurrency(Number(e.target.value))}
+                className="w-full accent-cyber-green"
+              />
+              <div className="flex justify-between text-[10px] text-cyber-muted-dim mt-1">
+                <span>1（保守）</span>
+                <span>50（默认）</span>
+                <span>500（激进）</span>
+              </div>
+              {concurrency > 100 && !selectedProxyId && (
+                <p className="text-[10px] text-cyber-orange mt-1.5 flex items-center gap-1">
+                  <AlertTriangle className="w-3 h-3" />
+                  高并发建议配合代理使用，避免 IP 被封
+                </p>
+              )}
             </div>
           </div>
         )}

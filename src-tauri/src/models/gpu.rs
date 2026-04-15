@@ -44,10 +44,7 @@ mod tests {
             serde_json::to_string(&GpuBackend::ROCm).unwrap(),
             "\"rocm\""
         );
-        assert_eq!(
-            serde_json::to_string(&GpuBackend::Cpu).unwrap(),
-            "\"cpu\""
-        );
+        assert_eq!(serde_json::to_string(&GpuBackend::Cpu).unwrap(), "\"cpu\"");
     }
 
     #[test]

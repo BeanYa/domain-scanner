@@ -1,8 +1,7 @@
+use crate::models::gpu::GpuBackend;
 /// Remote embedding API fallback when local GPU inference is unavailable
 /// Uses OpenAI-compatible embedding API
-
 use crate::models::llm::LlmConfig;
-use crate::models::gpu::GpuBackend;
 
 const EMBEDDING_DIM: usize = 384;
 
@@ -26,7 +25,10 @@ impl RemoteEmbeddingClient {
             .timeout(std::time::Duration::from_secs(60))
             .build()
             .unwrap_or_default();
-        Self { config, http_client }
+        Self {
+            config,
+            http_client,
+        }
     }
 
     /// Check if this client has an embedding model configured
@@ -36,7 +38,10 @@ impl RemoteEmbeddingClient {
 
     /// Get embeddings for a list of texts via remote API
     pub async fn embed(&self, texts: &[String]) -> Result<RemoteEmbeddingResult, String> {
-        let embedding_model = self.config.embedding_model.as_ref()
+        let embedding_model = self
+            .config
+            .embedding_model
+            .as_ref()
             .ok_or_else(|| "No embedding model configured".to_string())?;
 
         let url = format!("{}embeddings", self.config.base_url);
@@ -52,7 +57,8 @@ impl RemoteEmbeddingClient {
             input: texts.to_vec(),
         };
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.config.api_key))
             .header("Content-Type", "application/json")
@@ -88,7 +94,9 @@ impl RemoteEmbeddingClient {
             .await
             .map_err(|e| format!("Failed to parse remote embedding response: {}", e))?;
 
-        let embeddings: Vec<Vec<f32>> = embed_response.data.into_iter()
+        let embeddings: Vec<Vec<f32>> = embed_response
+            .data
+            .into_iter()
             .map(|d| d.embedding)
             .collect();
 
@@ -100,7 +108,11 @@ impl RemoteEmbeddingClient {
     }
 
     /// Get embeddings in batches to avoid API limits
-    pub async fn embed_batch(&self, texts: &[String], batch_size: usize) -> Result<RemoteEmbeddingResult, String> {
+    pub async fn embed_batch(
+        &self,
+        texts: &[String],
+        batch_size: usize,
+    ) -> Result<RemoteEmbeddingResult, String> {
         let mut all_embeddings = Vec::new();
         let mut total_tokens = 0i64;
 
@@ -113,7 +125,10 @@ impl RemoteEmbeddingClient {
         }
 
         Ok(RemoteEmbeddingResult {
-            dim: all_embeddings.first().map(|e| e.len()).unwrap_or(EMBEDDING_DIM),
+            dim: all_embeddings
+                .first()
+                .map(|e| e.len())
+                .unwrap_or(EMBEDDING_DIM),
             embeddings: all_embeddings,
             tokens_used: Some(total_tokens),
         })
@@ -183,7 +198,10 @@ mod tests {
 
     #[test]
     fn test_fallback_backend() {
-        assert_eq!(RemoteEmbeddingClient::determine_fallback_backend(), GpuBackend::Remote);
+        assert_eq!(
+            RemoteEmbeddingClient::determine_fallback_backend(),
+            GpuBackend::Remote
+        );
     }
 
     #[tokio::test]

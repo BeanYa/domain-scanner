@@ -1,6 +1,5 @@
 /// Local ONNX model for embedding generation
 /// Uses ort (ONNX Runtime) for inference with optional GPU acceleration
-
 use crate::models::gpu::GpuBackend;
 
 const EMBEDDING_DIM: usize = 384;
@@ -22,7 +21,11 @@ pub struct EmbeddingResult {
 
 impl LocalEmbeddingModel {
     pub fn new(model_path: String, backend: GpuBackend, batch_size: usize) -> Self {
-        Self { model_path, backend, batch_size }
+        Self {
+            model_path,
+            backend,
+            batch_size,
+        }
     }
 
     /// Get the embedding dimension
@@ -95,7 +98,9 @@ impl LocalEmbeddingModel {
         let mut embedding = Vec::with_capacity(EMBEDDING_DIM);
         for _ in 0..EMBEDDING_DIM {
             // Simple LCG pseudo-random number generator
-            rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            rng_state = rng_state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let val = ((rng_state >> 33) as i32) as f32 / i32::MAX as f32;
             embedding.push(val);
         }
@@ -117,19 +122,11 @@ mod tests {
     use super::*;
 
     fn make_test_model() -> LocalEmbeddingModel {
-        LocalEmbeddingModel::new(
-            "/nonexistent/model.onnx".to_string(),
-            GpuBackend::Cpu,
-            500,
-        )
+        LocalEmbeddingModel::new("/nonexistent/model.onnx".to_string(), GpuBackend::Cpu, 500)
     }
 
     fn make_model_with_path(path: &str) -> LocalEmbeddingModel {
-        LocalEmbeddingModel::new(
-            path.to_string(),
-            GpuBackend::Cpu,
-            10,
-        )
+        LocalEmbeddingModel::new(path.to_string(), GpuBackend::Cpu, 10)
     }
 
     #[test]
@@ -162,7 +159,9 @@ mod tests {
         let model = make_model_with_path(model_path.to_str().unwrap());
         assert!(model.model_exists());
 
-        let result = model.embed(&["hello".to_string(), "world".to_string()]).unwrap();
+        let result = model
+            .embed(&["hello".to_string(), "world".to_string()])
+            .unwrap();
         assert_eq!(result.embeddings.len(), 2);
         assert_eq!(result.dim, EMBEDDING_DIM);
         assert_eq!(result.embeddings[0].len(), EMBEDDING_DIM);
@@ -178,8 +177,16 @@ mod tests {
         let result = model.embed(&["test text".to_string()]).unwrap();
 
         // Check unit length normalization
-        let norm: f32 = result.embeddings[0].iter().map(|v| v * v).sum::<f32>().sqrt();
-        assert!((norm - 1.0).abs() < 0.01, "Embedding should be normalized, got norm = {}", norm);
+        let norm: f32 = result.embeddings[0]
+            .iter()
+            .map(|v| v * v)
+            .sum::<f32>()
+            .sqrt();
+        assert!(
+            (norm - 1.0).abs() < 0.01,
+            "Embedding should be normalized, got norm = {}",
+            norm
+        );
     }
 
     #[test]
@@ -201,7 +208,9 @@ mod tests {
         std::fs::write(&model_path, b"fake").unwrap();
 
         let model = make_model_with_path(model_path.to_str().unwrap());
-        let result = model.embed(&["hello".to_string(), "world".to_string()]).unwrap();
+        let result = model
+            .embed(&["hello".to_string(), "world".to_string()])
+            .unwrap();
         assert_ne!(result.embeddings[0], result.embeddings[1]);
     }
 

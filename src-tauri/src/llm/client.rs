@@ -58,7 +58,10 @@ impl LlmClient {
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .unwrap_or_default();
-        Self { config, http_client }
+        Self {
+            config,
+            http_client,
+        }
     }
 
     /// Send a chat completion request
@@ -71,7 +74,8 @@ impl LlmClient {
             max_tokens: Some(4096),
         };
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.config.api_key))
             .header("Content-Type", "application/json")
@@ -100,7 +104,10 @@ impl LlmClient {
 
     /// Get embeddings for a list of texts
     pub async fn embed(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>, String> {
-        let embedding_model = self.config.embedding_model.clone()
+        let embedding_model = self
+            .config
+            .embedding_model
+            .clone()
             .ok_or_else(|| "No embedding model configured".to_string())?;
 
         let url = format!("{}embeddings", self.config.base_url);
@@ -109,7 +116,8 @@ impl LlmClient {
             input: texts,
         };
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.config.api_key))
             .header("Content-Type", "application/json")
@@ -129,7 +137,11 @@ impl LlmClient {
             .await
             .map_err(|e| format!("Failed to parse embedding response: {}", e))?;
 
-        Ok(embed_response.data.into_iter().map(|d| d.embedding).collect())
+        Ok(embed_response
+            .data
+            .into_iter()
+            .map(|d| d.embedding)
+            .collect())
     }
 
     /// Test the connection to the LLM API

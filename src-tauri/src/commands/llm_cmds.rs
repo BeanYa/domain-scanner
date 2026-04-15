@@ -1,5 +1,5 @@
-use crate::db::llm_repo::LlmRepo;
 use crate::db::init;
+use crate::db::llm_repo::LlmRepo;
 use crate::llm::client::LlmClient;
 use crate::llm::providers::LlmProviders;
 use crate::models::llm::LlmConfig;
@@ -7,7 +7,7 @@ use serde::Deserialize;
 
 #[tauri::command]
 pub fn list_llm_configs() -> Result<String, String> {
-    let conn = init::open_and_init(":memory:").map_err(|e| e.to_string())?;
+    let conn = init::open_db().map_err(|e| e.to_string())?;
     let repo = LlmRepo::new(&conn);
 
     let configs = repo.list().map_err(|e| e.to_string())?;
@@ -42,11 +42,13 @@ pub struct SaveLlmConfigRequest {
 
 #[tauri::command]
 pub fn save_llm_config(request: SaveLlmConfigRequest) -> Result<String, String> {
-    let conn = init::open_and_init(":memory:").map_err(|e| e.to_string())?;
+    let conn = init::open_db().map_err(|e| e.to_string())?;
     let repo = LlmRepo::new(&conn);
 
     let config = LlmConfig {
-        id: request.id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+        id: request
+            .id
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         name: request.name,
         base_url: request.base_url,
         api_key: request.api_key,
@@ -57,7 +59,11 @@ pub fn save_llm_config(request: SaveLlmConfigRequest) -> Result<String, String> 
     };
 
     // Try update first, then create
-    if repo.get_by_id(&config.id).map_err(|e| e.to_string())?.is_some() {
+    if repo
+        .get_by_id(&config.id)
+        .map_err(|e| e.to_string())?
+        .is_some()
+    {
         repo.update(&config).map_err(|e| e.to_string())?;
     } else {
         repo.create(&config).map_err(|e| e.to_string())?;
@@ -70,17 +76,18 @@ pub fn save_llm_config(request: SaveLlmConfigRequest) -> Result<String, String> 
 pub async fn test_llm_config(config_id: String) -> Result<String, String> {
     // Fetch config in a blocking scope to avoid Send issues
     let config_result: Result<Option<LlmConfig>, String> = {
-        let conn = init::open_and_init(":memory:").map_err(|e| e.to_string())?;
+        let conn = init::open_db().map_err(|e| e.to_string())?;
         let repo = LlmRepo::new(&conn);
         repo.get_by_id(&config_id).map_err(|e| e.to_string())
     };
 
-    let config = config_result?
-        .ok_or_else(|| format!("LLM config not found: {}", config_id))?;
+    let config = config_result?.ok_or_else(|| format!("LLM config not found: {}", config_id))?;
 
     let client = LlmClient::new(config);
     match client.test_connection().await {
-        Ok(()) => Ok(serde_json::json!({"success": true, "message": "Connection successful"}).to_string()),
+        Ok(()) => Ok(
+            serde_json::json!({"success": true, "message": "Connection successful"}).to_string(),
+        ),
         Err(e) => Ok(serde_json::json!({"success": false, "message": e}).to_string()),
     }
 }

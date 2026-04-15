@@ -1,10 +1,11 @@
-pub mod init;
-pub mod task_repo;
 pub mod batch_repo;
-pub mod scan_item_repo;
+pub mod filter_repo;
+pub mod gpu_repo;
+pub mod init;
+pub mod llm_repo;
 pub mod log_repo;
 pub mod proxy_repo;
-pub mod llm_repo;
-pub mod gpu_repo;
-pub mod filter_repo;
+pub mod scan_item_repo;
+pub mod task_repo;
+pub mod task_run_repo;
 pub mod vector_repo;

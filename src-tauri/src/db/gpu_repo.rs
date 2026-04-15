@@ -11,7 +11,7 @@ impl<'a> GpuRepo<'a> {
 
     pub fn get_config(&self) -> Result<GpuConfig, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, backend, device_id, batch_size, model_path FROM gpu_configs WHERE id = 1"
+            "SELECT id, backend, device_id, batch_size, model_path FROM gpu_configs WHERE id = 1",
         )?;
         let mut rows = stmt.query([])?;
         match rows.next()? {
@@ -151,8 +151,13 @@ mod tests {
         let (conn, _temp) = setup();
         let repo = GpuRepo::new(&conn);
         let backends = [
-            GpuBackend::Auto, GpuBackend::Cuda, GpuBackend::DirectML,
-            GpuBackend::ROCm, GpuBackend::CoreML, GpuBackend::Cpu, GpuBackend::Remote,
+            GpuBackend::Auto,
+            GpuBackend::Cuda,
+            GpuBackend::DirectML,
+            GpuBackend::ROCm,
+            GpuBackend::CoreML,
+            GpuBackend::Cpu,
+            GpuBackend::Remote,
         ];
         for backend in &backends {
             repo.set_backend(backend).unwrap();

@@ -69,7 +69,8 @@ impl<'a> ProxyRepo<'a> {
     }
 
     pub fn delete(&self, id: i64) -> Result<(), rusqlite::Error> {
-        self.conn.execute("DELETE FROM proxies WHERE id = ?1", [id])?;
+        self.conn
+            .execute("DELETE FROM proxies WHERE id = ?1", [id])?;
         Ok(())
     }
 
@@ -129,8 +130,10 @@ mod tests {
     fn test_list_all_proxies() {
         let (conn, _temp) = setup();
         let repo = ProxyRepo::new(&conn);
-        repo.create(&make_proxy(0, "http://p1:8080", ProxyType::Http, true)).unwrap();
-        repo.create(&make_proxy(0, "https://p2:8443", ProxyType::Https, false)).unwrap();
+        repo.create(&make_proxy(0, "http://p1:8080", ProxyType::Http, true))
+            .unwrap();
+        repo.create(&make_proxy(0, "https://p2:8443", ProxyType::Https, false))
+            .unwrap();
         let all = repo.list(false).unwrap();
         assert_eq!(all.len(), 2);
     }
@@ -139,8 +142,10 @@ mod tests {
     fn test_list_active_proxies() {
         let (conn, _temp) = setup();
         let repo = ProxyRepo::new(&conn);
-        repo.create(&make_proxy(0, "http://p1:8080", ProxyType::Http, true)).unwrap();
-        repo.create(&make_proxy(0, "https://p2:8443", ProxyType::Https, false)).unwrap();
+        repo.create(&make_proxy(0, "http://p1:8080", ProxyType::Http, true))
+            .unwrap();
+        repo.create(&make_proxy(0, "https://p2:8443", ProxyType::Https, false))
+            .unwrap();
         let active = repo.list(true).unwrap();
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].url, "http://p1:8080");
@@ -150,7 +155,9 @@ mod tests {
     fn test_update_proxy() {
         let (conn, _temp) = setup();
         let repo = ProxyRepo::new(&conn);
-        let id = repo.create(&make_proxy(0, "http://p1:8080", ProxyType::Http, true)).unwrap();
+        let id = repo
+            .create(&make_proxy(0, "http://p1:8080", ProxyType::Http, true))
+            .unwrap();
         let mut proxy = repo.get_by_id(id).unwrap().unwrap();
         proxy.url = "http://updated:9999".to_string();
         repo.update(&proxy).unwrap();
@@ -162,7 +169,9 @@ mod tests {
     fn test_set_active() {
         let (conn, _temp) = setup();
         let repo = ProxyRepo::new(&conn);
-        let id = repo.create(&make_proxy(0, "http://p1:8080", ProxyType::Http, true)).unwrap();
+        let id = repo
+            .create(&make_proxy(0, "http://p1:8080", ProxyType::Http, true))
+            .unwrap();
         repo.set_active(id, false).unwrap();
         let fetched = repo.get_by_id(id).unwrap().unwrap();
         assert!(!fetched.is_active);
@@ -172,7 +181,9 @@ mod tests {
     fn test_delete_proxy() {
         let (conn, _temp) = setup();
         let repo = ProxyRepo::new(&conn);
-        let id = repo.create(&make_proxy(0, "http://p1:8080", ProxyType::Http, true)).unwrap();
+        let id = repo
+            .create(&make_proxy(0, "http://p1:8080", ProxyType::Http, true))
+            .unwrap();
         repo.delete(id).unwrap();
         assert!(repo.get_by_id(id).unwrap().is_none());
     }

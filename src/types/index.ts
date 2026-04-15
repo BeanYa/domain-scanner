@@ -21,6 +21,8 @@ export interface Task {
   /** Multiple TLDs this task scans (e.g. [".com", ".net", ".org"]) */
   tlds: string[];
   prefix_pattern: string | null;
+  concurrency: number;
+  proxy_id: number | null;
   total_count: number;
   completed_count: number;
   completed_index: number;
@@ -59,6 +61,7 @@ export interface GpuStatus {
 export interface ScanItem {
   id: number;
   task_id: string;
+  run_id: string;
   domain: string;
   tld: string;
   item_index: number;
@@ -108,9 +111,23 @@ export interface PaginatedResult<T> {
 export interface LogEntry {
   id: number;
   task_id: string;
+  run_id: string | null;
   level: "debug" | "info" | "warn" | "error";
   message: string;
   created_at: string;
+}
+
+export interface TaskRun {
+  id: string;
+  task_id: string;
+  run_number: number;
+  status: TaskStatus;
+  total_count: number;
+  completed_count: number;
+  available_count: number;
+  error_count: number;
+  started_at: string;
+  finished_at: string | null;
 }
 
 export interface VectorProgress {

@@ -1,6 +1,5 @@
 /// GPU detector for automatic backend selection
 /// Detects available GPU hardware and selects the best ONNX Runtime backend
-
 use crate::models::gpu::{GpuBackend, GpuConfig, GpuStatus};
 
 /// GPU detector for selecting the best available backend
@@ -316,7 +315,10 @@ mod tests {
         // On Windows with a GPU, should detect DirectML or at least report GPU name
         let status = GpuDetector::detect();
         if cfg!(target_os = "windows") {
-            println!("Detected backend: {:?}, name: {:?}", status.backend, status.device_name);
+            println!(
+                "Detected backend: {:?}, name: {:?}",
+                status.backend, status.device_name
+            );
         }
         assert!(status.available);
     }

@@ -12,13 +12,14 @@ impl<'a> TaskRepo<'a> {
     pub fn create(&self, task: &Task) -> Result<(), rusqlite::Error> {
         let tlds_json = serde_json::to_string(&task.tlds).unwrap_or_else(|_| "[]".to_string());
         self.conn.execute(
-            "INSERT INTO tasks (id, batch_id, name, signature, status, scan_mode, config_json, tlds, prefix_pattern, total_count, completed_count, completed_index, available_count, error_count, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            "INSERT INTO tasks (id, batch_id, name, signature, status, scan_mode, config_json, tlds, prefix_pattern, concurrency, proxy_id, total_count, completed_count, completed_index, available_count, error_count, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             rusqlite::params![
                 task.id, task.batch_id, task.name, task.signature,
                 serde_json::to_string(&task.status).unwrap(),
                 serde_json::to_string(&task.scan_mode).unwrap(),
                 task.config_json, tlds_json, task.prefix_pattern,
+                task.concurrency, task.proxy_id,
                 task.total_count, task.completed_count, task.completed_index,
                 task.available_count, task.error_count,
                 task.created_at, task.updated_at
@@ -29,7 +30,7 @@ impl<'a> TaskRepo<'a> {
 
     pub fn get_by_id(&self, id: &str) -> Result<Option<Task>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, batch_id, name, signature, status, scan_mode, config_json, tlds, prefix_pattern, total_count, completed_count, completed_index, available_count, error_count, created_at, updated_at FROM tasks WHERE id = ?1"
+            "SELECT id, batch_id, name, signature, status, scan_mode, config_json, tlds, prefix_pattern, concurrency, proxy_id, total_count, completed_count, completed_index, available_count, error_count, created_at, updated_at FROM tasks WHERE id = ?1"
         )?;
         let mut rows = stmt.query([id])?;
         match rows.next()? {
@@ -71,6 +72,21 @@ impl<'a> TaskRepo<'a> {
         Ok(())
     }
 
+    pub fn reset_for_rerun(&self, id: &str) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE tasks
+             SET status = ?1,
+                 completed_count = 0,
+                 completed_index = 0,
+                 available_count = 0,
+                 error_count = 0,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?2",
+            rusqlite::params![serde_json::to_string(&TaskStatus::Pending).unwrap(), id],
+        )?;
+        Ok(())
+    }
+
     /// List tasks with optional status filter and pagination
     pub fn list(
         &self,
@@ -80,7 +96,7 @@ impl<'a> TaskRepo<'a> {
         offset: i64,
     ) -> Result<Vec<Task>, rusqlite::Error> {
         let mut sql = String::from(
-            "SELECT id, batch_id, name, signature, status, scan_mode, config_json, tlds, prefix_pattern, total_count, completed_count, completed_index, available_count, error_count, created_at, updated_at FROM tasks WHERE 1=1"
+            "SELECT id, batch_id, name, signature, status, scan_mode, config_json, tlds, prefix_pattern, concurrency, proxy_id, total_count, completed_count, completed_index, available_count, error_count, created_at, updated_at FROM tasks WHERE 1=1"
         );
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
@@ -96,7 +112,8 @@ impl<'a> TaskRepo<'a> {
         param_values.push(Box::new(limit));
         param_values.push(Box::new(offset));
 
-        let params: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
         let mut stmt = self.conn.prepare(&sql)?;
         let tasks = stmt
             .query_map(params.as_slice(), |row| self.row_to_task(row))?
@@ -116,9 +133,9 @@ impl<'a> TaskRepo<'a> {
                     |row| row.get(0),
                 )
             }
-            None => {
-                self.conn.query_row("SELECT COUNT(*) FROM tasks", [], |row| row.get(0))
-            }
+            None => self
+                .conn
+                .query_row("SELECT COUNT(*) FROM tasks", [], |row| row.get(0)),
         }
     }
 
@@ -159,7 +176,11 @@ impl<'a> TaskRepo<'a> {
         let tlds_raw: String = row.get(7)?;
         let tlds: Vec<String> = serde_json::from_str(&tlds_raw).unwrap_or_else(|_| {
             // Backward compat: if it's a single TLD (not JSON), wrap in array
-            if tlds_raw.starts_with('[') { vec![] } else { vec![tlds_raw] }
+            if tlds_raw.starts_with('[') {
+                vec![]
+            } else {
+                vec![tlds_raw]
+            }
         });
 
         Ok(Task {
@@ -168,17 +189,21 @@ impl<'a> TaskRepo<'a> {
             name: row.get(2)?,
             signature: row.get(3)?,
             status: serde_json::from_str(&row.get::<_, String>(4)?).unwrap_or(TaskStatus::Pending),
-            scan_mode: serde_json::from_str(&row.get::<_, String>(5)?).unwrap_or(ScanMode::Regex { pattern: String::new() }),
+            scan_mode: serde_json::from_str(&row.get::<_, String>(5)?).unwrap_or(ScanMode::Regex {
+                pattern: String::new(),
+            }),
             config_json: row.get(6)?,
             tlds,
             prefix_pattern: row.get(8)?,
-            total_count: row.get(9)?,
-            completed_count: row.get(10)?,
-            completed_index: row.get(11)?,
-            available_count: row.get(12)?,
-            error_count: row.get(13)?,
-            created_at: row.get(14)?,
-            updated_at: row.get(15)?,
+            concurrency: row.get::<_, i64>(9).unwrap_or(50),
+            proxy_id: row.get(10)?,
+            total_count: row.get(11)?,
+            completed_count: row.get(12)?,
+            completed_index: row.get(13)?,
+            available_count: row.get(14)?,
+            error_count: row.get(15)?,
+            created_at: row.get(16)?,
+            updated_at: row.get(17)?,
         })
     }
 }
@@ -204,10 +229,14 @@ mod tests {
             name: "Test".to_string(),
             signature: sig.to_string(),
             status: TaskStatus::Pending,
-            scan_mode: ScanMode::Regex { pattern: "^[a-z]{3}$".to_string() },
+            scan_mode: ScanMode::Regex {
+                pattern: "^[a-z]{3}$".to_string(),
+            },
             config_json: "{}".to_string(),
             tlds: tlds.iter().map(|s| s.to_string()).collect(),
             prefix_pattern: None,
+            concurrency: 50,
+            proxy_id: None,
             total_count: 17576 * tlds.len() as i64,
             completed_count: 0,
             completed_index: 0,
@@ -298,11 +327,33 @@ mod tests {
     }
 
     #[test]
+    fn test_reset_for_rerun() {
+        let (conn, _temp) = setup();
+        let repo = TaskRepo::new(&conn);
+        let mut task = make_test_task("t1", "sig1", vec![".com"]);
+        task.status = TaskStatus::Completed;
+        task.completed_count = 100;
+        task.completed_index = 100;
+        task.available_count = 25;
+        task.error_count = 3;
+        repo.create(&task).unwrap();
+        repo.reset_for_rerun("t1").unwrap();
+        let fetched = repo.get_by_id("t1").unwrap().unwrap();
+        assert_eq!(fetched.status, TaskStatus::Pending);
+        assert_eq!(fetched.completed_count, 0);
+        assert_eq!(fetched.completed_index, 0);
+        assert_eq!(fetched.available_count, 0);
+        assert_eq!(fetched.error_count, 0);
+    }
+
+    #[test]
     fn test_list_all_tasks() {
         let (conn, _temp) = setup();
         let repo = TaskRepo::new(&conn);
-        repo.create(&make_test_task("t1", "sig1", vec![".com"])).unwrap();
-        repo.create(&make_test_task("t2", "sig2", vec![".net"])).unwrap();
+        repo.create(&make_test_task("t1", "sig1", vec![".com"]))
+            .unwrap();
+        repo.create(&make_test_task("t2", "sig2", vec![".net"]))
+            .unwrap();
         let tasks = repo.list(None, None, 100, 0).unwrap();
         assert_eq!(tasks.len(), 2);
     }
@@ -311,7 +362,8 @@ mod tests {
     fn test_list_tasks_by_status() {
         let (conn, _temp) = setup();
         let repo = TaskRepo::new(&conn);
-        repo.create(&make_test_task("t1", "sig1", vec![".com"])).unwrap();
+        repo.create(&make_test_task("t1", "sig1", vec![".com"]))
+            .unwrap();
         let mut task2 = make_test_task("t2", "sig2", vec![".net"]);
         task2.status = TaskStatus::Running;
         repo.create(&task2).unwrap();
@@ -326,12 +378,14 @@ mod tests {
         conn.execute(
             "INSERT INTO task_batches (id, name, task_count) VALUES ('batch1', 'Test Batch', 1)",
             [],
-        ).unwrap();
+        )
+        .unwrap();
         let repo = TaskRepo::new(&conn);
         let mut t1 = make_test_task("t1", "sig1", vec![".com"]);
         t1.batch_id = Some("batch1".to_string());
         repo.create(&t1).unwrap();
-        repo.create(&make_test_task("t2", "sig2", vec![".net"])).unwrap();
+        repo.create(&make_test_task("t2", "sig2", vec![".net"]))
+            .unwrap();
         let batch_tasks = repo.list(None, Some("batch1"), 100, 0).unwrap();
         assert_eq!(batch_tasks.len(), 1);
         assert_eq!(batch_tasks[0].batch_id, Some("batch1".to_string()));
@@ -342,7 +396,12 @@ mod tests {
         let (conn, _temp) = setup();
         let repo = TaskRepo::new(&conn);
         for i in 0..5 {
-            repo.create(&make_test_task(&format!("t{i}"), &format!("sig{i}"), vec![".com"])).unwrap();
+            repo.create(&make_test_task(
+                &format!("t{i}"),
+                &format!("sig{i}"),
+                vec![".com"],
+            ))
+            .unwrap();
         }
         let page1 = repo.list(None, None, 2, 0).unwrap();
         let page2 = repo.list(None, None, 2, 2).unwrap();
@@ -355,8 +414,10 @@ mod tests {
         let (conn, _temp) = setup();
         let repo = TaskRepo::new(&conn);
         assert_eq!(repo.count(None).unwrap(), 0);
-        repo.create(&make_test_task("t1", "sig1", vec![".com"])).unwrap();
-        repo.create(&make_test_task("t2", "sig2", vec![".net"])).unwrap();
+        repo.create(&make_test_task("t1", "sig1", vec![".com"]))
+            .unwrap();
+        repo.create(&make_test_task("t2", "sig2", vec![".net"]))
+            .unwrap();
         assert_eq!(repo.count(None).unwrap(), 2);
         assert_eq!(repo.count(Some(&TaskStatus::Pending)).unwrap(), 2);
     }
@@ -365,7 +426,8 @@ mod tests {
     fn test_delete_task() {
         let (conn, _temp) = setup();
         let repo = TaskRepo::new(&conn);
-        repo.create(&make_test_task("t1", "sig1", vec![".com"])).unwrap();
+        repo.create(&make_test_task("t1", "sig1", vec![".com"]))
+            .unwrap();
         repo.delete("t1").unwrap();
         assert!(repo.get_by_id("t1").unwrap().is_none());
     }

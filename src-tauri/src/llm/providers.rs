@@ -38,7 +38,13 @@ impl LlmProviders {
     }
 
     /// OpenAI-compatible configuration
-    pub fn openai_compatible(id: &str, name: &str, base_url: &str, api_key: &str, model: &str) -> LlmConfig {
+    pub fn openai_compatible(
+        id: &str,
+        name: &str,
+        base_url: &str,
+        api_key: &str,
+        model: &str,
+    ) -> LlmConfig {
         LlmConfig {
             id: id.to_string(),
             name: name.to_string(),
@@ -83,7 +89,11 @@ mod tests {
     #[test]
     fn test_openai_compatible_config() {
         let config = LlmProviders::openai_compatible(
-            "custom", "Custom", "https://api.custom.com/v1/", "sk-test", "gpt-4"
+            "custom",
+            "Custom",
+            "https://api.custom.com/v1/",
+            "sk-test",
+            "gpt-4",
         );
         assert_eq!(config.id, "custom");
         assert_eq!(config.model, "gpt-4");

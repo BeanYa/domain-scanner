@@ -1,5 +1,7 @@
-use std::time::{Duration, Instant};
 use crate::models::scan_item::ScanItemStatus;
+use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, USER_AGENT};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// Result of a domain availability check
 #[derive(Debug, Clone)]
@@ -10,6 +12,22 @@ pub struct CheckResult {
     pub query_method: Option<String>,
     pub response_time_ms: Option<i64>,
     pub error_message: Option<String>,
+}
+
+pub type CheckLogger = Arc<dyn Fn(String, String) + Send + Sync>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RdapErrorKind {
+    Forbidden,
+    RateLimited,
+    Retryable,
+    Permanent,
+}
+
+#[derive(Debug, Clone)]
+struct RdapError {
+    kind: RdapErrorKind,
+    message: String,
 }
 
 /// Configuration for domain checking
@@ -26,12 +44,8 @@ impl Default for CheckConfig {
         Self {
             rdap_timeout: Duration::from_secs(10),
             dns_timeout: Duration::from_secs(5),
-            max_retries: 3,
-            retry_delays: vec![
-                Duration::from_secs(1),
-                Duration::from_secs(2),
-                Duration::from_secs(4),
-            ],
+            max_retries: 2,
+            retry_delays: vec![Duration::from_millis(800), Duration::from_millis(1500)],
         }
     }
 }
@@ -40,19 +54,27 @@ impl Default for CheckConfig {
 pub struct DomainChecker {
     config: CheckConfig,
     http_client: reqwest::Client,
+    proxy_label: Option<String>,
+    logger: Option<CheckLogger>,
 }
 
 impl DomainChecker {
     pub fn new(config: CheckConfig) -> Self {
-        let http_client = reqwest::Client::builder()
-            .timeout(config.rdap_timeout)
-            .build()
-            .unwrap_or_default();
-        Self { config, http_client }
+        Self::build(config, None, None)
+    }
+
+    /// Create a DomainChecker that routes requests through a proxy
+    pub fn with_proxy(config: CheckConfig, proxy: reqwest::Proxy, proxy_label: String) -> Self {
+        Self::build(config, Some(proxy), Some(proxy_label))
     }
 
     pub fn with_default_config() -> Self {
         Self::new(CheckConfig::default())
+    }
+
+    pub fn with_log_hook(mut self, logger: CheckLogger) -> Self {
+        self.logger = Some(logger);
+        self
     }
 
     /// Check domain availability via RDAP + DNS fallback
@@ -63,38 +85,71 @@ impl DomainChecker {
         match self.check_rdap_with_retry(domain).await {
             Ok(result) => {
                 let elapsed = start.elapsed().as_millis() as i64;
-                return CheckResult {
+                CheckResult {
                     domain: domain.to_string(),
-                    status: if result { ScanItemStatus::Available } else { ScanItemStatus::Unavailable },
+                    status: if result {
+                        ScanItemStatus::Available
+                    } else {
+                        ScanItemStatus::Unavailable
+                    },
                     is_available: Some(result),
                     query_method: Some("rdap".to_string()),
                     response_time_ms: Some(elapsed),
                     error_message: None,
-                };
+                }
             }
             Err(e) => {
-                // RDAP failed, try DNS fallback
+                self.log(
+                    "warn",
+                    format!(
+                        "RDAP failed for {}: {}. Falling back to DNS lookup",
+                        domain, e.message
+                    ),
+                );
                 match self.check_dns_fallback(domain).await {
                     Ok(result) => {
                         let elapsed = start.elapsed().as_millis() as i64;
+                        self.log(
+                            "warn",
+                            format!(
+                                "DNS fallback completed for {}: {}",
+                                domain,
+                                if result {
+                                    "likely available"
+                                } else {
+                                    "registered or resolves"
+                                }
+                            ),
+                        );
                         CheckResult {
                             domain: domain.to_string(),
-                            status: if result { ScanItemStatus::Available } else { ScanItemStatus::Unavailable },
+                            status: if result {
+                                ScanItemStatus::Available
+                            } else {
+                                ScanItemStatus::Unavailable
+                            },
                             is_available: Some(result),
                             query_method: Some("dns".to_string()),
                             response_time_ms: Some(elapsed),
-                            error_message: Some(format!("RDAP failed: {}, used DNS fallback", e)),
+                            error_message: Some(format!(
+                                "RDAP failed: {}, used DNS fallback",
+                                e.message
+                            )),
                         }
                     }
                     Err(dns_err) => {
                         let elapsed = start.elapsed().as_millis() as i64;
+                        self.log(
+                            "error",
+                            format!("DNS fallback failed for {}: {}", domain, dns_err),
+                        );
                         CheckResult {
                             domain: domain.to_string(),
                             status: ScanItemStatus::Error,
                             is_available: None,
                             query_method: None,
                             response_time_ms: Some(elapsed),
-                            error_message: Some(format!("RDAP: {}, DNS: {}", e, dns_err)),
+                            error_message: Some(format!("RDAP: {}, DNS: {}", e.message, dns_err)),
                         }
                     }
                 }
@@ -103,56 +158,141 @@ impl DomainChecker {
     }
 
     /// Check via RDAP with exponential backoff retry
-    async fn check_rdap_with_retry(&self, domain: &str) -> Result<bool, String> {
+    async fn check_rdap_with_retry(&self, domain: &str) -> Result<bool, RdapError> {
         let tld = extract_tld(domain);
         let rdap_url = self.get_rdap_url(domain, &tld);
+        let total_attempts = self.config.max_retries + 1;
+        let mut last_error = None;
 
-        let mut last_error = String::new();
         for attempt in 0..=self.config.max_retries {
-            if attempt > 0 {
-                let default_delay = Duration::from_secs(8);
-                let delay = self.config.retry_delays
-                    .get((attempt - 1) as usize)
-                    .unwrap_or(&default_delay);
-                tokio::time::sleep(*delay).await;
-            }
+            let attempt_number = attempt + 1;
+            self.log(
+                "info",
+                format!(
+                    "Sending RDAP request [{}/{}] for {} -> {} via {}",
+                    attempt_number,
+                    total_attempts,
+                    domain,
+                    rdap_url,
+                    self.transport_label()
+                ),
+            );
 
             match self.query_rdap(&rdap_url).await {
-                Ok(available) => return Ok(available),
-                Err(e) => {
-                    last_error = e;
-                    // If rate limited, always retry
-                    // If not found (404), domain is likely available
-                    continue;
+                Ok(available) => {
+                    self.log(
+                        "info",
+                        format!(
+                            "RDAP request succeeded for {} on attempt {}/{}: {}",
+                            domain,
+                            attempt_number,
+                            total_attempts,
+                            if available {
+                                "likely available"
+                            } else {
+                                "registered"
+                            }
+                        ),
+                    );
+                    return Ok(available);
+                }
+                Err(err) => {
+                    let should_retry = attempt < self.config.max_retries
+                        && matches!(
+                            err.kind,
+                            RdapErrorKind::RateLimited | RdapErrorKind::Retryable
+                        );
+
+                    if should_retry {
+                        let default_delay = Duration::from_secs(3);
+                        let delay = *self
+                            .config
+                            .retry_delays
+                            .get(attempt as usize)
+                            .unwrap_or(&default_delay);
+                        self.log(
+                            "warn",
+                            format!(
+                                "RDAP attempt [{}/{}] failed for {}: {}. Retrying in {} ms",
+                                attempt_number,
+                                total_attempts,
+                                domain,
+                                err.message,
+                                delay.as_millis()
+                            ),
+                        );
+                        last_error = Some(err);
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+
+                    if matches!(err.kind, RdapErrorKind::Forbidden) {
+                        self.log(
+                            "warn",
+                            format!(
+                                "RDAP access forbidden for {} via {}. Skipping further retries",
+                                domain,
+                                self.transport_label()
+                            ),
+                        );
+                    } else {
+                        self.log(
+                            "warn",
+                            format!(
+                                "RDAP failed for {} after {}/{} attempts: {}",
+                                domain, attempt_number, total_attempts, err.message
+                            ),
+                        );
+                    }
+                    return Err(err);
                 }
             }
         }
-        Err(last_error)
+
+        Err(last_error.unwrap_or_else(|| RdapError {
+            kind: RdapErrorKind::Permanent,
+            message: "RDAP request failed".to_string(),
+        }))
     }
 
     /// Query RDAP server
-    async fn query_rdap(&self, url: &str) -> Result<bool, String> {
+    async fn query_rdap(&self, url: &str) -> Result<bool, RdapError> {
         let response = self.http_client.get(url).send().await;
         match response {
-            Ok(resp) => {
-                match resp.status() {
-                    s if s == reqwest::StatusCode::OK => {
-                        // Domain exists in RDAP registry -> registered
-                        Ok(false)
-                    }
-                    s if s == reqwest::StatusCode::NOT_FOUND => {
-                        // Domain not found in RDAP -> likely available
-                        Ok(true)
-                    }
-                    s if s == reqwest::StatusCode::TOO_MANY_REQUESTS => {
-                        Err("Rate limited".to_string())
-                    }
-                    s => {
-                        Err(format!("RDAP returned status: {}", s))
-                    }
+            Ok(resp) => match resp.status() {
+                s if s == reqwest::StatusCode::OK => Ok(false),
+                s if s == reqwest::StatusCode::NOT_FOUND => Ok(true),
+                s if s == reqwest::StatusCode::TOO_MANY_REQUESTS => Err(RdapError {
+                    kind: RdapErrorKind::RateLimited,
+                    message: "RDAP returned status: 429 Too Many Requests".to_string(),
+                }),
+                s if s == reqwest::StatusCode::FORBIDDEN
+                    || s == reqwest::StatusCode::UNAUTHORIZED =>
+                {
+                    Err(RdapError {
+                        kind: RdapErrorKind::Forbidden,
+                        message: format!("RDAP returned status: {}", s),
+                    })
                 }
-            }
-            Err(e) => Err(format!("RDAP request failed: {}", e)),
+                s if s.is_server_error() || s == reqwest::StatusCode::REQUEST_TIMEOUT => {
+                    Err(RdapError {
+                        kind: RdapErrorKind::Retryable,
+                        message: format!("RDAP returned status: {}", s),
+                    })
+                }
+                s => Err(RdapError {
+                    kind: RdapErrorKind::Permanent,
+                    message: format!("RDAP returned status: {}", s),
+                }),
+            },
+            Err(e) => Err(RdapError {
+                kind: if e.is_timeout() || e.is_connect() || e.is_request() {
+                    RdapErrorKind::Retryable
+                } else {
+                    RdapErrorKind::Permanent
+                },
+                message: format!("RDAP request failed: {}", e),
+            }),
         }
     }
 
@@ -160,17 +300,23 @@ impl DomainChecker {
     async fn check_dns_fallback(&self, domain: &str) -> Result<bool, String> {
         use hickory_resolver::TokioAsyncResolver;
 
-
         let config = hickory_resolver::config::ResolverConfig::default();
         let opts = hickory_resolver::config::ResolverOpts::default();
         let resolver = TokioAsyncResolver::tokio(config, opts);
+        self.log(
+            "info",
+            format!(
+                "Sending DNS lookup for {} via system resolver (proxy not used)",
+                domain
+            ),
+        );
 
         match resolver.lookup_ip(domain).await {
-            Ok(_) => Ok(false), // DNS record exists -> likely registered
+            Ok(_) => Ok(false),
             Err(e) => {
                 let err_str = format!("{}", e);
                 if err_str.contains("No records found") || err_str.contains("NXDOMAIN") {
-                    Ok(true) // No DNS record -> likely available
+                    Ok(true)
                 } else {
                     Err(format!("DNS lookup error: {}", e))
                 }
@@ -180,7 +326,6 @@ impl DomainChecker {
 
     /// Get RDAP URL for a domain
     fn get_rdap_url(&self, domain: &str, tld: &str) -> String {
-        // Common RDAP server URLs
         let rdap_base = match tld {
             ".com" => "https://rdap.verisign.com/com/v1",
             ".net" => "https://rdap.verisign.com/net/v1",
@@ -190,19 +335,75 @@ impl DomainChecker {
             ".dev" => "https://rdap.nic.dev",
             ".app" => "https://rdap.nic.app",
             ".ai" => "https://rdap.nic.ai",
-            _ => "https://rdap.org", // Generic bootstrap
+            _ => "https://rdap.org",
         };
         format!("{}/domain/{}", rdap_base, domain)
     }
 
     /// Check multiple domains concurrently
     pub async fn check_domains(&self, domains: &[String], concurrency: usize) -> Vec<CheckResult> {
-        use futures::stream::{self, StreamExt};
-        stream::iter(domains)
-            .map(|d| self.check_domain(d))
-            .buffer_unordered(concurrency)
-            .collect()
-            .await
+        use futures::stream::{FuturesUnordered, StreamExt};
+
+        let sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
+        let mut futs = FuturesUnordered::new();
+
+        for domain in domains {
+            let d = domain.clone();
+            let permit = sem.clone().acquire_owned().await.unwrap();
+            futs.push(async move {
+                let result = self.check_domain(&d).await;
+                drop(permit);
+                result
+            });
+        }
+
+        let mut results = Vec::with_capacity(domains.len());
+        while let Some(result) = futs.next().await {
+            results.push(result);
+        }
+        results
+    }
+
+    fn build(
+        config: CheckConfig,
+        proxy: Option<reqwest::Proxy>,
+        proxy_label: Option<String>,
+    ) -> Self {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            ACCEPT,
+            HeaderValue::from_static("application/rdap+json, application/json;q=0.9, */*;q=0.8"),
+        );
+        headers.insert(
+            USER_AGENT,
+            HeaderValue::from_static("domain-scanner-app/0.1"),
+        );
+
+        let mut builder = reqwest::Client::builder()
+            .timeout(config.rdap_timeout)
+            .default_headers(headers);
+
+        if let Some(proxy) = proxy {
+            builder = builder.proxy(proxy);
+        }
+
+        let http_client = builder.build().unwrap_or_default();
+        Self {
+            config,
+            http_client,
+            proxy_label,
+            logger: None,
+        }
+    }
+
+    fn transport_label(&self) -> &str {
+        self.proxy_label.as_deref().unwrap_or("direct")
+    }
+
+    fn log(&self, level: &str, message: String) {
+        if let Some(logger) = &self.logger {
+            logger(level.to_string(), message);
+        }
     }
 }
 
@@ -223,8 +424,8 @@ mod tests {
     #[test]
     fn test_check_config_default() {
         let config = CheckConfig::default();
-        assert_eq!(config.max_retries, 3);
-        assert_eq!(config.retry_delays.len(), 3);
+        assert_eq!(config.max_retries, 2);
+        assert_eq!(config.retry_delays.len(), 2);
         assert_eq!(config.rdap_timeout, Duration::from_secs(10));
     }
 
@@ -238,9 +439,18 @@ mod tests {
     #[test]
     fn test_get_rdap_url() {
         let checker = DomainChecker::with_default_config();
-        assert_eq!(checker.get_rdap_url("example.com", ".com"), "https://rdap.verisign.com/com/v1/domain/example.com");
-        assert_eq!(checker.get_rdap_url("example.net", ".net"), "https://rdap.verisign.com/net/v1/domain/example.net");
-        assert_eq!(checker.get_rdap_url("example.org", ".org"), "https://rdap.publicinterestregistry.org/rdap/domain/example.org");
+        assert_eq!(
+            checker.get_rdap_url("example.com", ".com"),
+            "https://rdap.verisign.com/com/v1/domain/example.com"
+        );
+        assert_eq!(
+            checker.get_rdap_url("example.net", ".net"),
+            "https://rdap.verisign.com/net/v1/domain/example.net"
+        );
+        assert_eq!(
+            checker.get_rdap_url("example.org", ".org"),
+            "https://rdap.publicinterestregistry.org/rdap/domain/example.org"
+        );
     }
 
     #[tokio::test]

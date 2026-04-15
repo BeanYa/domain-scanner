@@ -57,7 +57,8 @@ impl<'a> LlmRepo<'a> {
     }
 
     pub fn delete(&self, id: &str) -> Result<(), rusqlite::Error> {
-        self.conn.execute("DELETE FROM llm_configs WHERE id = ?1", [id])?;
+        self.conn
+            .execute("DELETE FROM llm_configs WHERE id = ?1", [id])?;
         Ok(())
     }
 
@@ -74,12 +75,11 @@ impl<'a> LlmRepo<'a> {
 
     pub fn set_default(&self, id: &str) -> Result<(), rusqlite::Error> {
         // Unset all defaults first
-        self.conn.execute("UPDATE llm_configs SET is_default = 0", [])?;
+        self.conn
+            .execute("UPDATE llm_configs SET is_default = 0", [])?;
         // Set the new default
-        self.conn.execute(
-            "UPDATE llm_configs SET is_default = 1 WHERE id = ?1",
-            [id],
-        )?;
+        self.conn
+            .execute("UPDATE llm_configs SET is_default = 1 WHERE id = ?1", [id])?;
         Ok(())
     }
 
@@ -149,7 +149,8 @@ mod tests {
         let (conn, _temp) = setup();
         let repo = LlmRepo::new(&conn);
         repo.create(&make_config("glm4", "GLM-4", true)).unwrap();
-        repo.create(&make_config("minimax", "MiniMax", false)).unwrap();
+        repo.create(&make_config("minimax", "MiniMax", false))
+            .unwrap();
         let configs = repo.list().unwrap();
         assert_eq!(configs.len(), 2);
     }
@@ -183,7 +184,8 @@ mod tests {
         let repo = LlmRepo::new(&conn);
         assert!(repo.get_default().unwrap().is_none());
         repo.create(&make_config("glm4", "GLM-4", true)).unwrap();
-        repo.create(&make_config("minimax", "MiniMax", false)).unwrap();
+        repo.create(&make_config("minimax", "MiniMax", false))
+            .unwrap();
         let default = repo.get_default().unwrap().unwrap();
         assert_eq!(default.id, "glm4");
     }
@@ -193,7 +195,8 @@ mod tests {
         let (conn, _temp) = setup();
         let repo = LlmRepo::new(&conn);
         repo.create(&make_config("glm4", "GLM-4", true)).unwrap();
-        repo.create(&make_config("minimax", "MiniMax", false)).unwrap();
+        repo.create(&make_config("minimax", "MiniMax", false))
+            .unwrap();
         repo.set_default("minimax").unwrap();
         let default = repo.get_default().unwrap().unwrap();
         assert_eq!(default.id, "minimax");

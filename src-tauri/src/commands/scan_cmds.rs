@@ -1,5 +1,5 @@
-use crate::scanner::list_generator::ListGenerator;
 use crate::models::task::ScanMode;
+use crate::scanner::list_generator::ListGenerator;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]
@@ -23,7 +23,8 @@ pub fn scan_preview(request: ScanPreviewRequest) -> Result<String, String> {
     match &request.scan_mode {
         ScanMode::Manual { domains } => {
             let count = domains.len() as i64 * tld_count;
-            let samples: Vec<String> = domains.iter()
+            let samples: Vec<String> = domains
+                .iter()
                 .take(request.sample_count.unwrap_or(10))
                 .flat_map(|d| request.tlds.iter().map(move |t| format!("{}{}", d, t)))
                 .collect();
@@ -41,7 +42,8 @@ pub fn scan_preview(request: ScanPreviewRequest) -> Result<String, String> {
 
             let total_count = gen.total_count();
             let batch = gen.next_batch();
-            let sample_domains: Vec<String> = batch.iter()
+            let sample_domains: Vec<String> = batch
+                .iter()
                 .take(request.sample_count.unwrap_or(10))
                 .map(|item| item.domain.clone())
                 .collect();
@@ -71,7 +73,9 @@ mod tests {
     #[test]
     fn test_scan_preview_regex_single_tld() {
         let req = ScanPreviewRequest {
-            scan_mode: ScanMode::Regex { pattern: "^[a-z]{2}$".to_string() },
+            scan_mode: ScanMode::Regex {
+                pattern: "^[a-z]{2}$".to_string(),
+            },
             tlds: vec![".com".to_string()],
             sample_count: Some(5),
         };
@@ -85,7 +89,9 @@ mod tests {
     #[test]
     fn test_scan_preview_regex_multi_tld() {
         let req = ScanPreviewRequest {
-            scan_mode: ScanMode::Regex { pattern: "^[a-z]{2}$".to_string() },
+            scan_mode: ScanMode::Regex {
+                pattern: "^[a-z]{2}$".to_string(),
+            },
             tlds: vec![".com".to_string(), ".net".to_string()],
             sample_count: Some(5),
         };
@@ -98,7 +104,9 @@ mod tests {
     #[test]
     fn test_scan_preview_manual_single_tld() {
         let req = ScanPreviewRequest {
-            scan_mode: ScanMode::Manual { domains: vec!["test".to_string(), "demo".to_string()] },
+            scan_mode: ScanMode::Manual {
+                domains: vec!["test".to_string(), "demo".to_string()],
+            },
             tlds: vec![".com".to_string()],
             sample_count: Some(10),
         };
@@ -111,7 +119,9 @@ mod tests {
     #[test]
     fn test_scan_preview_manual_multi_tld() {
         let req = ScanPreviewRequest {
-            scan_mode: ScanMode::Manual { domains: vec!["alpha".to_string()] },
+            scan_mode: ScanMode::Manual {
+                domains: vec!["alpha".to_string()],
+            },
             tlds: vec![".com".to_string(), ".net".to_string(), ".org".to_string()],
             sample_count: Some(10),
         };

@@ -1,11 +1,12 @@
-use std::sync::Arc;
-use tokio::sync::Semaphore;
+use crate::db::scan_item_repo::ScanItemRepo;
+use crate::db::task_repo::TaskRepo;
+use crate::db::task_run_repo::TaskRunRepo;
 use crate::models::scan_item::{ScanItem, ScanItemStatus};
 use crate::models::task::TaskStatus;
 use crate::scanner::domain_checker::{CheckConfig, DomainChecker};
 use crate::scanner::list_generator::ListGenerator;
-use crate::db::task_repo::TaskRepo;
-use crate::db::scan_item_repo::ScanItemRepo;
+use std::sync::{Arc, Mutex};
+use tauri::{AppHandle, Emitter};
 
 /// Scan engine configuration
 #[derive(Debug, Clone)]
@@ -50,6 +51,10 @@ impl ScanEngine {
         Self { config, checker }
     }
 
+    pub fn from_parts(config: EngineConfig, checker: DomainChecker) -> Self {
+        Self { config, checker }
+    }
+
     pub fn with_default_config() -> Self {
         Self::new(EngineConfig::default(), CheckConfig::default())
     }
@@ -59,12 +64,15 @@ impl ScanEngine {
     pub async fn run_scan(
         &self,
         task_id: &str,
-        conn: Arc<rusqlite::Connection>,
+        run_id: &str,
+        conn: Arc<Mutex<rusqlite::Connection>>,
         cancel_token: tokio_util::sync::CancellationToken,
+        app: &AppHandle,
     ) -> Result<ScanProgress, String> {
         // Get task info
         let task = {
-            let repo = TaskRepo::new(&conn);
+            let c = conn.lock().map_err(|e| e.to_string())?;
+            let repo = TaskRepo::new(&c);
             repo.get_by_id(task_id)
                 .map_err(|e| format!("Failed to get task: {}", e))?
                 .ok_or_else(|| format!("Task {} not found", task_id))?
@@ -72,28 +80,59 @@ impl ScanEngine {
 
         // Update task status to running
         {
-            let repo = TaskRepo::new(&conn);
+            let c = conn.lock().map_err(|e| e.to_string())?;
+            let repo = TaskRepo::new(&c);
             repo.update_status(task_id, &TaskStatus::Running)
                 .map_err(|e| format!("Failed to update status: {}", e))?;
         }
 
         // Create generator starting from checkpoint
         let mut generator = ListGenerator::new(task.scan_mode.clone(), task.tlds.clone())
+            .with_batch_size(self.config.batch_write_size.max(1))
             .with_start_index(task.completed_index);
+        let total_count = task.total_count.max(generator.total_count());
 
-        let _semaphore = Arc::new(Semaphore::new(self.config.max_concurrency));
         let mut completed_count = task.completed_count;
         let mut available_count = task.available_count;
         let mut error_count = task.error_count;
+        let initial_progress = self.make_progress(
+            task_id,
+            completed_count,
+            total_count,
+            available_count,
+            error_count,
+        );
+        let _ = app.emit("scan-progress", &initial_progress);
 
         while generator.has_more() {
             // Check for cancellation
             if cancel_token.is_cancelled() {
-                self.persist_progress(&conn, task_id, completed_count, generator.current_index(), available_count, error_count);
-                let repo = TaskRepo::new(&conn);
-                repo.update_status(task_id, &TaskStatus::Paused)
-                    .map_err(|e| format!("Failed to pause: {}", e))?;
-                return Ok(self.make_progress(task_id, completed_count, task.total_count, available_count, error_count));
+                self.persist_progress_locked(
+                    &conn,
+                    task_id,
+                    run_id,
+                    completed_count,
+                    generator.current_index(),
+                    available_count,
+                    error_count,
+                );
+                {
+                    let c = conn.lock().map_err(|e| e.to_string())?;
+                    let repo = TaskRepo::new(&c);
+                    repo.update_status(task_id, &TaskStatus::Paused)
+                        .map_err(|e| format!("Failed to pause: {}", e))?;
+                    let run_repo = TaskRunRepo::new(&c);
+                    run_repo
+                        .update_status(run_id, &TaskStatus::Paused, false)
+                        .map_err(|e| format!("Failed to pause run: {}", e))?;
+                }
+                return Ok(self.make_progress(
+                    task_id,
+                    completed_count,
+                    total_count,
+                    available_count,
+                    error_count,
+                ));
             }
 
             // Get next batch
@@ -104,7 +143,10 @@ impl ScanEngine {
 
             // Check domains concurrently
             let domains: Vec<String> = batch.iter().map(|c| c.domain.clone()).collect();
-            let results = self.checker.check_domains(&domains, self.config.max_concurrency).await;
+            let results = self
+                .checker
+                .check_domains(&domains, self.config.max_concurrency)
+                .await;
 
             // Process results
             let mut scan_items = Vec::new();
@@ -116,10 +158,15 @@ impl ScanEngine {
                     ScanItemStatus::Error => error_count += 1,
                     _ => {}
                 }
+                if result.error_message.is_some() && !matches!(result.status, ScanItemStatus::Error)
+                {
+                    error_count += 1;
+                }
 
                 scan_items.push(ScanItem {
                     id: 0,
                     task_id: task_id.to_string(),
+                    run_id: run_id.to_string(),
                     domain: result.domain.clone(),
                     tld: candidate.tld.clone(),
                     item_index: candidate.index,
@@ -133,55 +180,102 @@ impl ScanEngine {
 
                 // Batch write to database
                 if scan_items.len() >= self.config.batch_write_size {
-                    self.write_scan_items(&conn, &scan_items);
+                    self.write_scan_items_locked(&conn, &scan_items);
                     scan_items.clear();
                 }
             }
 
             // Write remaining items
             if !scan_items.is_empty() {
-                self.write_scan_items(&conn, &scan_items);
+                self.write_scan_items_locked(&conn, &scan_items);
             }
 
             // Update progress in database
-            self.persist_progress(&conn, task_id, completed_count, generator.current_index(), available_count, error_count);
+            self.persist_progress_locked(
+                &conn,
+                task_id,
+                run_id,
+                completed_count,
+                generator.current_index(),
+                available_count,
+                error_count,
+            );
+
+            // Emit progress event to frontend
+            let progress = self.make_progress(
+                task_id,
+                completed_count,
+                total_count,
+                available_count,
+                error_count,
+            );
+            let _ = app.emit("scan-progress", &progress);
 
             // Random delay between requests
             if self.config.request_delay_ms > 0 {
-                let jitter = rand::Rng::gen_range(&mut rand::thread_rng(), 0..self.config.request_delay_ms);
+                let jitter =
+                    rand::Rng::gen_range(&mut rand::thread_rng(), 0..self.config.request_delay_ms);
                 tokio::time::sleep(std::time::Duration::from_millis(jitter)).await;
             }
         }
 
         // Mark task as completed
         {
-            let repo = TaskRepo::new(&conn);
+            let c = conn.lock().map_err(|e| e.to_string())?;
+            let repo = TaskRepo::new(&c);
             repo.update_status(task_id, &TaskStatus::Completed)
                 .map_err(|e| format!("Failed to complete: {}", e))?;
+            let run_repo = TaskRunRepo::new(&c);
+            run_repo
+                .update_status(run_id, &TaskStatus::Completed, true)
+                .map_err(|e| format!("Failed to complete run: {}", e))?;
         }
 
-        Ok(self.make_progress(task_id, completed_count, task.total_count, available_count, error_count))
+        Ok(self.make_progress(
+            task_id,
+            completed_count,
+            total_count,
+            available_count,
+            error_count,
+        ))
     }
 
-    fn write_scan_items(&self, conn: &rusqlite::Connection, items: &[ScanItem]) {
-        let repo = ScanItemRepo::new(conn);
-        if let Err(e) = repo.batch_insert(items) {
-            tracing::error!("Failed to batch insert scan items: {}", e);
+    fn write_scan_items_locked(&self, conn: &Mutex<rusqlite::Connection>, items: &[ScanItem]) {
+        if let Ok(c) = conn.lock() {
+            let repo = ScanItemRepo::new(&c);
+            if let Err(e) = repo.batch_insert(items) {
+                tracing::error!("Failed to batch insert scan items: {}", e);
+            }
         }
     }
 
-    fn persist_progress(
+    fn persist_progress_locked(
         &self,
-        conn: &rusqlite::Connection,
+        conn: &Mutex<rusqlite::Connection>,
         task_id: &str,
+        run_id: &str,
         completed_count: i64,
         completed_index: i64,
         available_count: i64,
         error_count: i64,
     ) {
-        let repo = TaskRepo::new(conn);
-        if let Err(e) = repo.update_progress(task_id, completed_count, completed_index, available_count, error_count) {
-            tracing::error!("Failed to update progress: {}", e);
+        if let Ok(c) = conn.lock() {
+            let repo = TaskRepo::new(&c);
+            if let Err(e) = repo.update_progress(
+                task_id,
+                completed_count,
+                completed_index,
+                available_count,
+                error_count,
+            ) {
+                tracing::error!("Failed to update progress: {}", e);
+            }
+            let run_repo = TaskRunRepo::new(&c);
+            if let Err(e) =
+                run_repo.update_progress(run_id, completed_count, available_count, error_count)
+            {
+                tracing::error!("Failed to update run progress: {}", e);
+            }
         }
     }
 

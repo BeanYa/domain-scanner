@@ -31,6 +31,14 @@ export default function TaskList() {
     fetchTasks();
   }, []);
 
+  // Auto-refresh while any task is running
+  useEffect(() => {
+    const hasRunning = tasks.some((t) => t.status === "running");
+    if (!hasRunning) return;
+    const interval = setInterval(() => fetchTasks(), 3000);
+    return () => clearInterval(interval);
+  }, [tasks]);
+
   // Group tasks by batch_id
   const batchMap = new Map<string, typeof tasks>();
   const orphanTasks: typeof tasks = [];

@@ -1,6 +1,5 @@
 /// Stream exporter for scan results
 /// Supports JSON, CSV, and TXT formats with streaming file writes
-
 use crate::models::scan_item::ScanItem;
 use std::io::Write;
 use std::path::Path;
@@ -94,8 +93,11 @@ fn export_json<W: Write>(writer: &mut W, items: &[&ScanItem]) -> Result<(), Stri
 }
 
 fn export_csv<W: Write>(writer: &mut W, items: &[&ScanItem]) -> Result<(), String> {
-    writeln!(writer, "domain,tld,status,is_available,query_method,response_time_ms,error_message")
-        .map_err(|e| format!("Write error: {}", e))?;
+    writeln!(
+        writer,
+        "domain,tld,status,is_available,query_method,response_time_ms,error_message"
+    )
+    .map_err(|e| format!("Write error: {}", e))?;
     for item in items {
         let status = match &item.status {
             crate::models::scan_item::ScanItemStatus::Pending => "pending",
@@ -106,14 +108,16 @@ fn export_csv<W: Write>(writer: &mut W, items: &[&ScanItem]) -> Result<(), Strin
         };
         let is_available = item.is_available.unwrap_or(false).to_string();
         let query_method = item.query_method.as_deref().unwrap_or("");
-        let response_time = item.response_time_ms.map(|t| t.to_string()).unwrap_or_default();
+        let response_time = item
+            .response_time_ms
+            .map(|t| t.to_string())
+            .unwrap_or_default();
         let error = item.error_message.as_deref().unwrap_or("");
 
         writeln!(
             writer,
             "{},{},{},{},{},{},{}",
-            item.domain, item.tld, status, is_available,
-            query_method, response_time, error
+            item.domain, item.tld, status, is_available, query_method, response_time, error
         )
         .map_err(|e| format!("Write error: {}", e))?;
     }
@@ -130,7 +134,10 @@ fn export_txt<W: Write>(writer: &mut W, items: &[&ScanItem]) -> Result<(), Strin
 }
 
 /// Export only available domains (simplified TXT format)
-pub fn export_available_domains<W: Write>(writer: &mut W, items: &[ScanItem]) -> Result<(), String> {
+pub fn export_available_domains<W: Write>(
+    writer: &mut W,
+    items: &[ScanItem],
+) -> Result<(), String> {
     for item in items {
         if item.is_available.unwrap_or(false) {
             writeln!(writer, "{}", item.domain).map_err(|e| format!("Write error: {}", e))?;
@@ -143,7 +150,13 @@ pub fn export_available_domains<W: Write>(writer: &mut W, items: &[ScanItem]) ->
 pub fn get_export_path(base_dir: &str, task_name: &str, format: &ExportFormat) -> String {
     let safe_name: String = task_name
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     Path::new(base_dir)
         .join(format!("{}_export.{}", safe_name, format.file_extension()))
@@ -160,10 +173,17 @@ mod tests {
         ScanItem {
             id: 0,
             task_id: "task1".to_string(),
+            run_id: "run1".to_string(),
             domain: domain.to_string(),
             tld: ".com".to_string(),
             item_index: 0,
-            status: if error.is_some() { ScanItemStatus::Error } else if available { ScanItemStatus::Available } else { ScanItemStatus::Unavailable },
+            status: if error.is_some() {
+                ScanItemStatus::Error
+            } else if available {
+                ScanItemStatus::Available
+            } else {
+                ScanItemStatus::Unavailable
+            },
             is_available: Some(available),
             query_method: Some("rdap".to_string()),
             response_time_ms: Some(100),
@@ -204,9 +224,7 @@ mod tests {
 
     #[test]
     fn test_export_csv() {
-        let items = vec![
-            make_test_item("test.com", true, None),
-        ];
+        let items = vec![make_test_item("test.com", true, None)];
         let mut buf = Vec::new();
         let options = ExportOptions {
             format: ExportFormat::Csv,
@@ -277,7 +295,9 @@ mod tests {
         let path = get_export_path("/tmp", "my task\\test", &ExportFormat::Csv);
         // On Windows, path separator is \, on Unix it's /
         // The name should have special chars replaced with _
-        assert!(path.contains("my_task_test_export.csv") || path.contains("my_task\\test_export.csv"));
+        assert!(
+            path.contains("my_task_test_export.csv") || path.contains("my_task\\test_export.csv")
+        );
         assert!(path.ends_with(".csv"));
     }
 }

@@ -18,9 +18,9 @@ impl<'a> BatchRepo<'a> {
     }
 
     pub fn get_by_id(&self, id: &str) -> Result<Option<TaskBatch>, rusqlite::Error> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, task_count, created_at FROM task_batches WHERE id = ?1"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name, task_count, created_at FROM task_batches WHERE id = ?1")?;
         let mut rows = stmt.query([id])?;
         match rows.next()? {
             Some(row) => Ok(Some(TaskBatch {
@@ -60,12 +60,14 @@ impl<'a> BatchRepo<'a> {
     }
 
     pub fn delete(&self, id: &str) -> Result<(), rusqlite::Error> {
-        self.conn.execute("DELETE FROM task_batches WHERE id = ?1", [id])?;
+        self.conn
+            .execute("DELETE FROM task_batches WHERE id = ?1", [id])?;
         Ok(())
     }
 
     pub fn count(&self) -> Result<i64, rusqlite::Error> {
-        self.conn.query_row("SELECT COUNT(*) FROM task_batches", [], |row| row.get(0))
+        self.conn
+            .query_row("SELECT COUNT(*) FROM task_batches", [], |row| row.get(0))
     }
 }
 
@@ -126,7 +128,8 @@ mod tests {
         let (conn, _temp) = setup();
         let repo = BatchRepo::new(&conn);
         for i in 0..5 {
-            repo.create(&make_batch(&format!("b{i}"), &format!("Batch {i}"), i)).unwrap();
+            repo.create(&make_batch(&format!("b{i}"), &format!("Batch {i}"), i))
+                .unwrap();
         }
         let page1 = repo.list(2, 0).unwrap();
         let page2 = repo.list(2, 2).unwrap();

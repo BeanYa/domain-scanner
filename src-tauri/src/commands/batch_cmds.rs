@@ -1,6 +1,6 @@
 use crate::db::batch_repo::BatchRepo;
-use crate::db::task_repo::TaskRepo;
 use crate::db::init;
+use crate::db::task_repo::TaskRepo;
 use crate::models::task::TaskStatus;
 use serde::Deserialize;
 
@@ -12,10 +12,11 @@ pub struct ListBatchesRequest {
 
 #[tauri::command]
 pub fn list_batches(request: ListBatchesRequest) -> Result<String, String> {
-    let conn = init::open_and_init(":memory:").map_err(|e| e.to_string())?;
+    let conn = init::open_db().map_err(|e| e.to_string())?;
     let repo = BatchRepo::new(&conn);
 
-    let batches = repo.list(request.limit.unwrap_or(100), request.offset.unwrap_or(0))
+    let batches = repo
+        .list(request.limit.unwrap_or(100), request.offset.unwrap_or(0))
         .map_err(|e| e.to_string())?;
 
     serde_json::to_string(&batches).map_err(|e| e.to_string())
@@ -23,15 +24,17 @@ pub fn list_batches(request: ListBatchesRequest) -> Result<String, String> {
 
 #[tauri::command]
 pub fn batch_pause(batch_id: String) -> Result<(), String> {
-    let conn = init::open_and_init(":memory:").map_err(|e| e.to_string())?;
+    let conn = init::open_db().map_err(|e| e.to_string())?;
     let task_repo = TaskRepo::new(&conn);
 
-    let tasks = task_repo.list(None, Some(&batch_id), 10000, 0)
+    let tasks = task_repo
+        .list(None, Some(&batch_id), 10000, 0)
         .map_err(|e| e.to_string())?;
 
     for task in tasks {
         if task.status == TaskStatus::Running {
-            task_repo.update_status(&task.id, &TaskStatus::Paused)
+            task_repo
+                .update_status(&task.id, &TaskStatus::Paused)
                 .map_err(|e| e.to_string())?;
         }
     }
@@ -41,15 +44,17 @@ pub fn batch_pause(batch_id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn batch_resume(batch_id: String) -> Result<(), String> {
-    let conn = init::open_and_init(":memory:").map_err(|e| e.to_string())?;
+    let conn = init::open_db().map_err(|e| e.to_string())?;
     let task_repo = TaskRepo::new(&conn);
 
-    let tasks = task_repo.list(None, Some(&batch_id), 10000, 0)
+    let tasks = task_repo
+        .list(None, Some(&batch_id), 10000, 0)
         .map_err(|e| e.to_string())?;
 
     for task in tasks {
         if task.status == TaskStatus::Paused {
-            task_repo.update_status(&task.id, &TaskStatus::Running)
+            task_repo
+                .update_status(&task.id, &TaskStatus::Running)
                 .map_err(|e| e.to_string())?;
         }
     }

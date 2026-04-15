@@ -22,7 +22,7 @@ pub struct StartVectorizeRequest {
 
 #[tauri::command]
 pub fn start_vectorize(request: StartVectorizeRequest) -> Result<(), String> {
-    let _conn = init::open_and_init(":memory:").map_err(|e| e.to_string())?;
+    let _conn = init::open_db().map_err(|e| e.to_string())?;
 
     // Determine backend
     let gpu_config = GpuDetector::default_config();

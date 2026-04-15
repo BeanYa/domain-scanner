@@ -1,5 +1,5 @@
-use crate::db::scan_item_repo::ScanItemRepo;
 use crate::db::init;
+use crate::db::scan_item_repo::ScanItemRepo;
 use crate::export::exporter::{self, ExportFormat, ExportOptions};
 use serde::Deserialize;
 
@@ -17,7 +17,7 @@ pub fn export_results(request: ExportRequest) -> Result<(), String> {
     let format = ExportFormat::from_str(&request.format)
         .ok_or_else(|| format!("Unsupported export format: {}", request.format))?;
 
-    let conn = init::open_and_init(":memory:").map_err(|e| e.to_string())?;
+    let conn = init::open_db().map_err(|e| e.to_string())?;
     let repo = ScanItemRepo::new(&conn);
 
     // Fetch all items for the task
@@ -25,7 +25,8 @@ pub fn export_results(request: ExportRequest) -> Result<(), String> {
     let mut offset = 0i64;
     let batch_size = 1000i64;
     loop {
-        let items = repo.list_by_task(&request.task_id, None, batch_size, offset)
+        let items = repo
+            .list_by_task(&request.task_id, None, None, batch_size, offset)
             .map_err(|e| e.to_string())?;
         if items.is_empty() {
             break;
@@ -49,12 +50,13 @@ pub fn export_results(request: ExportRequest) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::scan_item::ScanItemStatus;
+    use crate::models::scan_item::{ScanItem, ScanItemStatus};
 
     fn make_test_item(domain: &str, available: bool) -> ScanItem {
         ScanItem {
             id: 1,
             task_id: "task1".to_string(),
+            run_id: "run1".to_string(),
             domain: domain.to_string(),
             tld: ".com".to_string(),
             item_index: 0,
@@ -78,7 +80,11 @@ mod tests {
     #[test]
     fn test_export_json_to_file() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let output_path = temp_dir.path().join("export.json").to_string_lossy().to_string();
+        let output_path = temp_dir
+            .path()
+            .join("export.json")
+            .to_string_lossy()
+            .to_string();
 
         let items = vec![
             make_test_item("test.com", true),

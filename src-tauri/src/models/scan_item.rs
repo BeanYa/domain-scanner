@@ -14,6 +14,7 @@ pub enum ScanItemStatus {
 pub struct ScanItem {
     pub id: i64,
     pub task_id: String,
+    pub run_id: String,
     pub domain: String,
     pub tld: String,
     pub item_index: i64,
@@ -44,6 +45,7 @@ mod tests {
         let item = ScanItem {
             id: 1,
             task_id: "task-1".to_string(),
+            run_id: "run-1".to_string(),
             domain: "test.com".to_string(),
             tld: ".com".to_string(),
             item_index: 0,

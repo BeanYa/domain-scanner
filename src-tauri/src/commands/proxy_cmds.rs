@@ -1,14 +1,16 @@
-use crate::db::proxy_repo::ProxyRepo;
 use crate::db::init;
+use crate::db::proxy_repo::ProxyRepo;
 use crate::models::proxy::{ProxyConfig, ProxyType};
 use serde::Deserialize;
 
 #[tauri::command]
 pub fn list_proxies(active_only: Option<bool>) -> Result<String, String> {
-    let conn = init::open_and_init(":memory:").map_err(|e| e.to_string())?;
+    let conn = init::open_db().map_err(|e| e.to_string())?;
     let repo = ProxyRepo::new(&conn);
 
-    let proxies = repo.list(active_only.unwrap_or(false)).map_err(|e| e.to_string())?;
+    let proxies = repo
+        .list(active_only.unwrap_or(false))
+        .map_err(|e| e.to_string())?;
     serde_json::to_string(&proxies).map_err(|e| e.to_string())
 }
 
@@ -23,7 +25,7 @@ pub struct CreateProxyRequest {
 
 #[tauri::command]
 pub fn create_proxy(request: CreateProxyRequest) -> Result<String, String> {
-    let conn = init::open_and_init(":memory:").map_err(|e| e.to_string())?;
+    let conn = init::open_db().map_err(|e| e.to_string())?;
     let repo = ProxyRepo::new(&conn);
 
     let proxy_type = match request.proxy_type.to_lowercase().as_str() {
@@ -44,26 +46,45 @@ pub fn create_proxy(request: CreateProxyRequest) -> Result<String, String> {
     };
 
     let id = repo.create(&proxy).map_err(|e| e.to_string())?;
-    let created = repo.get_by_id(id).map_err(|e| e.to_string())?
+    let created = repo
+        .get_by_id(id)
+        .map_err(|e| e.to_string())?
         .ok_or_else(|| "Failed to retrieve created proxy".to_string())?;
 
     serde_json::to_string(&created).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
+pub fn delete_proxy(proxy_id: i64) -> Result<(), String> {
+    let conn = init::open_db().map_err(|e| e.to_string())?;
+    let repo = ProxyRepo::new(&conn);
+    repo.delete(proxy_id).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 pub fn test_proxy(proxy_id: i64) -> Result<String, String> {
-    let conn = init::open_and_init(":memory:").map_err(|e| e.to_string())?;
+    let conn = init::open_db().map_err(|e| e.to_string())?;
     let repo = ProxyRepo::new(&conn);
 
-    let proxy = repo.get_by_id(proxy_id).map_err(|e| e.to_string())?
+    let proxy = repo
+        .get_by_id(proxy_id)
+        .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Proxy not found: {}", proxy_id))?;
 
     // Test proxy connectivity
     let proxy_url = match &proxy.username {
         Some(user) => {
             let pass = proxy.password.as_deref().unwrap_or("");
-            format!("{}://{}:{}@{}", proxy.proxy_type.to_url_scheme(), user, pass, 
-                proxy.url.trim_start_matches(&format!("{}://", proxy.proxy_type.to_url_scheme())))
+            format!(
+                "{}://{}:{}@{}",
+                proxy.proxy_type.to_url_scheme(),
+                user,
+                pass,
+                proxy
+                    .url
+                    .trim_start_matches(&format!("{}://", proxy.proxy_type.to_url_scheme()))
+            )
         }
         None => proxy.url.clone(),
     };
@@ -78,19 +99,25 @@ pub fn test_proxy(proxy_id: i64) -> Result<String, String> {
                 .build()
                 .map_err(|e| format!("Client build error: {}", e))?;
 
-            client.get("https://httpbin.org/ip")
+            client
+                .get("https://httpbin.org/ip")
                 .send()
                 .await
                 .map_err(|e| format!("Proxy test failed: {}", e))?;
 
             Ok::<(), String>(())
         })
-    }).join().unwrap();
+    })
+    .join()
+    .unwrap();
 
     match result {
         Ok(()) => {
             repo.set_active(proxy_id, true).map_err(|e| e.to_string())?;
-            Ok(serde_json::json!({"success": true, "message": "Proxy connection successful"}).to_string())
+            Ok(
+                serde_json::json!({"success": true, "message": "Proxy connection successful"})
+                    .to_string(),
+            )
         }
         Err(e) => {
             let _ = repo.set_active(proxy_id, false);

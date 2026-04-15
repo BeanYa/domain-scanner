@@ -29,11 +29,7 @@ Generate {count} domain name prefixes:"#,
 }
 
 /// Build a prompt for semantic filtering of domain names
-pub fn build_semantic_filter_prompt(
-    domains: &[String],
-    criteria: &str,
-    tld: &str,
-) -> String {
+pub fn build_semantic_filter_prompt(domains: &[String], criteria: &str, tld: &str) -> String {
     let domain_list = domains.join("\n");
     format!(
         r#"You are evaluating domain names for a specific purpose.
@@ -54,10 +50,7 @@ Only output the domain prefixes that match."#,
 }
 
 /// Build a prompt for domain name scoring
-pub fn build_domain_scoring_prompt(
-    domain: &str,
-    criteria: &str,
-) -> String {
+pub fn build_domain_scoring_prompt(domain: &str, criteria: &str) -> String {
     format!(
         r#"Rate this domain name on a scale of 1-10 for the given criteria.
 
@@ -101,7 +94,8 @@ pub fn parse_domain_list(response: &str) -> Vec<String> {
 
 /// Strip leading numbering like "1. ", "1) ", "1 "
 fn strip_numbering(s: &str) -> Option<String> {
-    let digits_end = s.char_indices()
+    let digits_end = s
+        .char_indices()
         .take_while(|(_, c)| c.is_ascii_digit())
         .last()
         .map(|(i, c)| i + c.len_utf8())?;
@@ -141,7 +135,10 @@ pub fn parse_score(response: &str) -> Option<f32> {
         }
     }
     // Try parsing the whole string
-    trimmed.parse::<f32>().ok().filter(|s| (1.0..=10.0).contains(s))
+    trimmed
+        .parse::<f32>()
+        .ok()
+        .filter(|s| (1.0..=10.0).contains(s))
 }
 
 #[cfg(test)]

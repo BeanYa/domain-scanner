@@ -73,7 +73,10 @@ impl ListGenerator {
 
     /// Get the next batch of domain candidates
     pub fn next_batch(&mut self) -> Vec<DomainCandidate> {
-        let end = std::cmp::min(self.current_index + self.batch_size as i64, self.total_count);
+        let end = std::cmp::min(
+            self.current_index + self.batch_size as i64,
+            self.total_count,
+        );
         let tld_count = self.tld_count() as i64;
 
         let batch: Vec<DomainCandidate> = (self.current_index..end)
@@ -98,12 +101,11 @@ impl ListGenerator {
         match mode {
             ScanMode::Regex { pattern } => Self::generate_from_regex(pattern),
             ScanMode::Wildcard { pattern } => Self::generate_from_wildcard(pattern),
-            ScanMode::Llm { prompt, .. } => {
-                prompt.split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect()
-            }
+            ScanMode::Llm { prompt, .. } => prompt
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
             ScanMode::Manual { domains } => domains.clone(),
         }
     }
@@ -165,7 +167,11 @@ fn parse_charset(s: &str) -> Option<Vec<char>> {
             i += 1;
         }
     }
-    if chars.is_empty() { None } else { Some(chars) }
+    if chars.is_empty() {
+        None
+    } else {
+        Some(chars)
+    }
 }
 
 /// Generate cartesian product of charset repeated count times
@@ -202,9 +208,9 @@ mod tests {
 
     #[test]
     fn test_generate_from_regex_3letter() {
-        let prefixes = ListGenerator::generate_prefixes(
-            &ScanMode::Regex { pattern: "^[a-z]{3}$".to_string() }
-        );
+        let prefixes = ListGenerator::generate_prefixes(&ScanMode::Regex {
+            pattern: "^[a-z]{3}$".to_string(),
+        });
         assert_eq!(prefixes.len(), 17576); // 26^3
         assert_eq!(prefixes[0], "aaa");
         assert_eq!(prefixes[17575], "zzz");
@@ -212,9 +218,9 @@ mod tests {
 
     #[test]
     fn test_generate_from_regex_digits() {
-        let prefixes = ListGenerator::generate_prefixes(
-            &ScanMode::Regex { pattern: "^[0-9]{2}$".to_string() }
-        );
+        let prefixes = ListGenerator::generate_prefixes(&ScanMode::Regex {
+            pattern: "^[0-9]{2}$".to_string(),
+        });
         assert_eq!(prefixes.len(), 100); // 10^2
         assert_eq!(prefixes[0], "00");
         assert_eq!(prefixes[99], "99");
@@ -222,9 +228,9 @@ mod tests {
 
     #[test]
     fn test_generate_from_wildcard() {
-        let prefixes = ListGenerator::generate_prefixes(
-            &ScanMode::Wildcard { pattern: "??".to_string() }
-        );
+        let prefixes = ListGenerator::generate_prefixes(&ScanMode::Wildcard {
+            pattern: "??".to_string(),
+        });
         assert_eq!(prefixes.len(), 676); // 26^2
         assert_eq!(prefixes[0], "aa");
         assert_eq!(prefixes[675], "zz");
@@ -232,7 +238,9 @@ mod tests {
 
     #[test]
     fn test_single_tld_task() {
-        let mode = ScanMode::Manual { domains: vec!["hello".to_string(), "world".to_string()] };
+        let mode = ScanMode::Manual {
+            domains: vec!["hello".to_string(), "world".to_string()],
+        };
         let mut gen = ListGenerator::new(mode, vec![".com".to_string()]);
         assert_eq!(gen.total_count(), 2); // 2 prefixes x 1 TLD
         assert_eq!(gen.tld_count(), 1);
@@ -245,8 +253,13 @@ mod tests {
 
     #[test]
     fn test_multi_tld_cartesian_product() {
-        let mode = ScanMode::Manual { domains: vec!["hello".to_string()] };
-        let mut gen = ListGenerator::new(mode, vec![".com".to_string(), ".net".to_string(), ".org".to_string()]);
+        let mode = ScanMode::Manual {
+            domains: vec!["hello".to_string()],
+        };
+        let mut gen = ListGenerator::new(
+            mode,
+            vec![".com".to_string(), ".net".to_string(), ".org".to_string()],
+        );
         assert_eq!(gen.total_count(), 3); // 1 prefix x 3 TLDs
         assert_eq!(gen.tld_count(), 3);
 
@@ -262,7 +275,9 @@ mod tests {
 
     #[test]
     fn test_multi_prefix_multi_tld() {
-        let mode = ScanMode::Manual { domains: vec!["alpha".to_string(), "beta".to_string()] };
+        let mode = ScanMode::Manual {
+            domains: vec!["alpha".to_string(), "beta".to_string()],
+        };
         let mut gen = ListGenerator::new(mode, vec![".com".to_string(), ".net".to_string()]);
         assert_eq!(gen.total_count(), 4); // 2 prefixes x 2 TLDs
 
@@ -277,7 +292,9 @@ mod tests {
 
     #[test]
     fn test_next_batch_with_limit() {
-        let mode = ScanMode::Regex { pattern: "^[a-z]{2}$".to_string() };
+        let mode = ScanMode::Regex {
+            pattern: "^[a-z]{2}$".to_string(),
+        };
         let mut gen = ListGenerator::new(mode, vec![".com".to_string(), ".net".to_string()])
             .with_batch_size(100);
         assert_eq!(gen.total_count(), 1352); // 676 * 2
@@ -293,7 +310,9 @@ mod tests {
 
     #[test]
     fn test_has_more_and_current_index() {
-        let mode = ScanMode::Manual { domains: vec!["test".to_string()] };
+        let mode = ScanMode::Manual {
+            domains: vec!["test".to_string()],
+        };
         let mut gen = ListGenerator::new(mode, vec![".com".to_string()]).with_batch_size(5000);
         assert!(gen.has_more());
         assert_eq!(gen.current_index(), 0);
@@ -304,7 +323,9 @@ mod tests {
 
     #[test]
     fn test_resume_from_index() {
-        let mode = ScanMode::Regex { pattern: "^[a-z]{2}$".to_string() };
+        let mode = ScanMode::Regex {
+            pattern: "^[a-z]{2}$".to_string(),
+        };
         let mut gen = ListGenerator::new(mode, vec![".com".to_string(), ".net".to_string()])
             .with_batch_size(100)
             .with_start_index(200);
@@ -322,8 +343,13 @@ mod tests {
 
     #[test]
     fn test_large_cartesian_total_count() {
-        let mode = ScanMode::Regex { pattern: "^[a-z]{3}$".to_string() };
-        let mut gen = ListGenerator::new(mode, vec![".com".to_string(), ".net".to_string(), ".org".to_string()]);
+        let mode = ScanMode::Regex {
+            pattern: "^[a-z]{3}$".to_string(),
+        };
+        let mut gen = ListGenerator::new(
+            mode,
+            vec![".com".to_string(), ".net".to_string(), ".org".to_string()],
+        );
         assert_eq!(gen.total_count(), 52728); // 17576 * 3
         assert_eq!(gen.prefix_count(), 17576);
         assert_eq!(gen.tld_count(), 3);

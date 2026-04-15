@@ -1,6 +1,5 @@
-use crate::models::proxy::{ProxyConfig, ProxyType};
+use crate::models::proxy::ProxyConfig;
 use std::sync::atomic::{AtomicUsize, Ordering};
-
 
 /// Proxy rotation manager with Round-Robin and health checking
 pub struct ProxyManager {
@@ -32,22 +31,18 @@ impl ProxyManager {
         Some(&self.proxies[index])
     }
 
-    /// Build a reqwest proxy from a ProxyConfig
+    /// Build a reqwest proxy from a ProxyConfig, including authentication if present
     pub fn build_reqwest_proxy(proxy: &ProxyConfig) -> Result<reqwest::Proxy, String> {
-        match proxy.proxy_type {
-            ProxyType::Http => {
-                reqwest::Proxy::all(&proxy.url)
-                    .map_err(|e| format!("Failed to create HTTP proxy: {}", e))
-            }
-            ProxyType::Https => {
-                reqwest::Proxy::all(&proxy.url)
-                    .map_err(|e| format!("Failed to create HTTPS proxy: {}", e))
-            }
-            ProxyType::Socks5 => {
-                reqwest::Proxy::all(&proxy.url)
-                    .map_err(|e| format!("Failed to create SOCKS5 proxy: {}", e))
-            }
-        }
+        let p = reqwest::Proxy::all(&proxy.url)
+            .map_err(|e| format!("Failed to create {:?} proxy: {}", proxy.proxy_type, e))?;
+
+        let p = match (&proxy.username, &proxy.password) {
+            (Some(user), Some(pass)) => p.basic_auth(user, pass),
+            (Some(user), None) => p.basic_auth(user, ""),
+            _ => p,
+        };
+
+        Ok(p)
     }
 
     /// Get the number of active proxies
@@ -74,7 +69,10 @@ impl ProxyManager {
             .build()
             .map_err(|e| format!("Failed to build client: {}", e))?;
 
-        let response = client.get(test_url).send().await
+        let response = client
+            .get(test_url)
+            .send()
+            .await
             .map_err(|e| format!("Proxy test failed: {}", e))?;
 
         if response.status().is_success() {
@@ -88,6 +86,7 @@ impl ProxyManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::proxy::ProxyType;
 
     fn make_proxy(id: i64, url: &str, active: bool) -> ProxyConfig {
         ProxyConfig {

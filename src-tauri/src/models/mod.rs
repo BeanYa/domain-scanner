@@ -1,5 +1,5 @@
-pub mod task;
-pub mod scan_item;
-pub mod proxy;
-pub mod llm;
 pub mod gpu;
+pub mod llm;
+pub mod proxy;
+pub mod scan_item;
+pub mod task;

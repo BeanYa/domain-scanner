@@ -16,13 +16,13 @@ pub struct FilterResult {
 
 #[tauri::command]
 pub fn filter_exact(request: FilterRequest) -> Result<String, String> {
-    let conn = init::open_and_init(":memory:").map_err(|e| e.to_string())?;
+    let conn = init::open_db().map_err(|e| e.to_string())?;
     let _repo = FilterRepo::new(&conn);
 
     // Exact match: query scan_items table directly
-    let mut stmt = conn.prepare(
-        "SELECT id FROM scan_items WHERE task_id = ?1 AND domain = ?2 LIMIT 1000"
-    ).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT id FROM scan_items WHERE task_id = ?1 AND domain = ?2 LIMIT 1000")
+        .map_err(|e| e.to_string())?;
 
     let items: Vec<crate::db::filter_repo::FilteredResult> = stmt
         .query_map(rusqlite::params![request.task_id, request.query], |_row| {
@@ -53,11 +53,14 @@ pub fn filter_exact(request: FilterRequest) -> Result<String, String> {
 
 #[tauri::command]
 pub fn filter_fuzzy(request: FilterRequest) -> Result<String, String> {
-    let conn = init::open_and_init(":memory:").map_err(|e| e.to_string())?;
+    let conn = init::open_db().map_err(|e| e.to_string())?;
     let repo = FilterRepo::new(&conn);
 
     // Fuzzy match: LIKE query
-    let pattern = format!("%{}%", request.query.replace('%', "\\%").replace('_', "\\_"));
+    let pattern = format!(
+        "%{}%",
+        request.query.replace('%', "\\%").replace('_', "\\_")
+    );
     let mut stmt = conn.prepare(
         "SELECT id, task_id, domain FROM scan_items WHERE task_id = ?1 AND domain LIKE ?2 ESCAPE '\\' LIMIT 1000"
     ).map_err(|e| e.to_string())?;
@@ -94,17 +97,16 @@ pub fn filter_fuzzy(request: FilterRequest) -> Result<String, String> {
 
 #[tauri::command]
 pub fn filter_regex(request: FilterRequest) -> Result<String, String> {
-    let conn = init::open_and_init(":memory:").map_err(|e| e.to_string())?;
+    let conn = init::open_db().map_err(|e| e.to_string())?;
     let repo = FilterRepo::new(&conn);
 
     // Regex match: use SQLite REGEXP (requires extension)
     // For now, do client-side regex matching
-    let re = regex_lite::Regex::new(&request.query)
-        .map_err(|e| format!("Invalid regex: {}", e))?;
+    let re = regex_lite::Regex::new(&request.query).map_err(|e| format!("Invalid regex: {}", e))?;
 
-    let mut stmt = conn.prepare(
-        "SELECT id, task_id, domain FROM scan_items WHERE task_id = ?1 LIMIT 10000"
-    ).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT id, task_id, domain FROM scan_items WHERE task_id = ?1 LIMIT 10000")
+        .map_err(|e| e.to_string())?;
 
     let items: Vec<crate::db::filter_repo::FilteredResult> = stmt
         .query_map(rusqlite::params![request.task_id], |row| {
@@ -117,16 +119,18 @@ pub fn filter_regex(request: FilterRequest) -> Result<String, String> {
         .map_err(|e| e.to_string())?
         .filter_map(|r| r.ok())
         .filter(|(_, _, domain)| re.is_match(domain))
-        .map(|(id, task_id, domain)| crate::db::filter_repo::FilteredResult {
-            id,
-            task_id,
-            domain,
-            filter_type: "regex".to_string(),
-            filter_pattern: Some(request.query.clone()),
-            is_matched: true,
-            score: None,
-            embedding_id: None,
-        })
+        .map(
+            |(id, task_id, domain)| crate::db::filter_repo::FilteredResult {
+                id,
+                task_id,
+                domain,
+                filter_type: "regex".to_string(),
+                filter_pattern: Some(request.query.clone()),
+                is_matched: true,
+                score: None,
+                embedding_id: None,
+            },
+        )
         .collect();
 
     if !items.is_empty() {
@@ -151,7 +155,7 @@ pub struct SemanticFilterRequest {
 
 #[tauri::command]
 pub fn filter_semantic(_request: SemanticFilterRequest) -> Result<String, String> {
-    let _conn = init::open_and_init(":memory:").map_err(|e| e.to_string())?;
+    let _conn = init::open_db().map_err(|e| e.to_string())?;
 
     // Semantic filtering requires embedding generation and vector search
     // Full implementation would:

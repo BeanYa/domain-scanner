@@ -12,10 +12,10 @@ impl<'a> ScanItemRepo<'a> {
     /// Insert a single scan item
     pub fn create(&self, item: &ScanItem) -> Result<i64, rusqlite::Error> {
         self.conn.execute(
-            "INSERT INTO scan_items (task_id, domain, tld, item_index, status, is_available, query_method, response_time_ms, error_message, checked_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO scan_items (task_id, run_id, domain, tld, item_index, status, is_available, query_method, response_time_ms, error_message, checked_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             rusqlite::params![
-                item.task_id, item.domain, item.tld, item.item_index,
+                item.task_id, item.run_id, item.domain, item.tld, item.item_index,
                 serde_json::to_string(&item.status).unwrap(),
                 item.is_available, item.query_method, item.response_time_ms,
                 item.error_message, item.checked_at
@@ -30,10 +30,10 @@ impl<'a> ScanItemRepo<'a> {
         let mut count = 0;
         for item in items {
             tx.execute(
-                "INSERT INTO scan_items (task_id, domain, tld, item_index, status, is_available, query_method, response_time_ms, error_message, checked_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                "INSERT INTO scan_items (task_id, run_id, domain, tld, item_index, status, is_available, query_method, response_time_ms, error_message, checked_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 rusqlite::params![
-                    item.task_id, item.domain, item.tld, item.item_index,
+                    item.task_id, item.run_id, item.domain, item.tld, item.item_index,
                     serde_json::to_string(&item.status).unwrap(),
                     item.is_available, item.query_method, item.response_time_ms,
                     item.error_message, item.checked_at
@@ -66,7 +66,7 @@ impl<'a> ScanItemRepo<'a> {
     /// Get scan item by ID
     pub fn get_by_id(&self, id: i64) -> Result<Option<ScanItem>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, task_id, domain, tld, item_index, status, is_available, query_method, response_time_ms, error_message, checked_at FROM scan_items WHERE id = ?1"
+            "SELECT id, task_id, run_id, domain, tld, item_index, status, is_available, query_method, response_time_ms, error_message, checked_at FROM scan_items WHERE id = ?1"
         )?;
         let mut rows = stmt.query([id])?;
         match rows.next()? {
@@ -79,15 +79,21 @@ impl<'a> ScanItemRepo<'a> {
     pub fn list_by_task(
         &self,
         task_id: &str,
+        run_id: Option<&str>,
         status: Option<&ScanItemStatus>,
         limit: i64,
         offset: i64,
     ) -> Result<Vec<ScanItem>, rusqlite::Error> {
         let mut sql = String::from(
-            "SELECT id, task_id, domain, tld, item_index, status, is_available, query_method, response_time_ms, error_message, checked_at FROM scan_items WHERE task_id = ?1"
+            "SELECT id, task_id, run_id, domain, tld, item_index, status, is_available, query_method, response_time_ms, error_message, checked_at FROM scan_items WHERE task_id = ?1"
         );
-        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(task_id.to_string())];
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> =
+            vec![Box::new(task_id.to_string())];
 
+        if let Some(rid) = run_id {
+            sql.push_str(" AND run_id = ?");
+            param_values.push(Box::new(rid.to_string()));
+        }
         if let Some(s) = status {
             sql.push_str(" AND status = ?");
             param_values.push(Box::new(serde_json::to_string(s).unwrap()));
@@ -96,7 +102,8 @@ impl<'a> ScanItemRepo<'a> {
         param_values.push(Box::new(limit));
         param_values.push(Box::new(offset));
 
-        let params: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
         let mut stmt = self.conn.prepare(&sql)?;
         let items = stmt
             .query_map(params.as_slice(), |row| self.row_to_item(row))?
@@ -106,24 +113,33 @@ impl<'a> ScanItemRepo<'a> {
     }
 
     /// Count scan items for a task, optionally filtered by status
-    pub fn count_by_task(&self, task_id: &str, status: Option<&ScanItemStatus>) -> Result<i64, rusqlite::Error> {
-        match status {
-            Some(s) => {
-                let status_str = serde_json::to_string(s).unwrap();
-                self.conn.query_row(
-                    "SELECT COUNT(*) FROM scan_items WHERE task_id = ?1 AND status = ?2",
-                    rusqlite::params![task_id, status_str],
-                    |row| row.get(0),
-                )
-            }
-            None => {
-                self.conn.query_row(
-                    "SELECT COUNT(*) FROM scan_items WHERE task_id = ?1",
-                    [task_id],
-                    |row| row.get(0),
-                )
-            }
+    pub fn count_by_task(
+        &self,
+        task_id: &str,
+        run_id: Option<&str>,
+        status: Option<&ScanItemStatus>,
+    ) -> Result<i64, rusqlite::Error> {
+        let mut sql = String::from("SELECT COUNT(*) FROM scan_items WHERE task_id = ?1");
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(task_id.to_string())];
+
+        if let Some(rid) = run_id {
+            sql.push_str(" AND run_id = ?");
+            params.push(Box::new(rid.to_string()));
         }
+        if let Some(s) = status {
+            sql.push_str(" AND status = ?");
+            params.push(Box::new(serde_json::to_string(s).unwrap()));
+        }
+
+        let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        self.conn.query_row(&sql, refs.as_slice(), |row| row.get(0))
+    }
+
+    /// Delete all scan items for a task
+    pub fn delete_by_task(&self, task_id: &str) -> Result<(), rusqlite::Error> {
+        self.conn
+            .execute("DELETE FROM scan_items WHERE task_id = ?1", [task_id])?;
+        Ok(())
     }
 
     /// Get scan items by index range (for checkpoint resume)
@@ -134,10 +150,12 @@ impl<'a> ScanItemRepo<'a> {
         limit: i64,
     ) -> Result<Vec<ScanItem>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, task_id, domain, tld, item_index, status, is_available, query_method, response_time_ms, error_message, checked_at FROM scan_items WHERE task_id = ?1 AND item_index >= ?2 ORDER BY item_index ASC LIMIT ?3"
+            "SELECT id, task_id, run_id, domain, tld, item_index, status, is_available, query_method, response_time_ms, error_message, checked_at FROM scan_items WHERE task_id = ?1 AND item_index >= ?2 ORDER BY item_index ASC LIMIT ?3"
         )?;
         let items = stmt
-            .query_map(rusqlite::params![task_id, from_index, limit], |row| self.row_to_item(row))?
+            .query_map(rusqlite::params![task_id, from_index, limit], |row| {
+                self.row_to_item(row)
+            })?
             .filter_map(|r| r.ok())
             .collect();
         Ok(items)
@@ -147,15 +165,17 @@ impl<'a> ScanItemRepo<'a> {
         Ok(ScanItem {
             id: row.get(0)?,
             task_id: row.get(1)?,
-            domain: row.get(2)?,
-            tld: row.get(3)?,
-            item_index: row.get(4)?,
-            status: serde_json::from_str(&row.get::<_, String>(5)?).unwrap_or(ScanItemStatus::Pending),
-            is_available: row.get(6)?,
-            query_method: row.get(7)?,
-            response_time_ms: row.get(8)?,
-            error_message: row.get(9)?,
-            checked_at: row.get(10)?,
+            run_id: row.get(2)?,
+            domain: row.get(3)?,
+            tld: row.get(4)?,
+            item_index: row.get(5)?,
+            status: serde_json::from_str(&row.get::<_, String>(6)?)
+                .unwrap_or(ScanItemStatus::Pending),
+            is_available: row.get(7)?,
+            query_method: row.get(8)?,
+            response_time_ms: row.get(9)?,
+            error_message: row.get(10)?,
+            checked_at: row.get(11)?,
         })
     }
 }
@@ -182,10 +202,14 @@ mod tests {
             name: "Test".to_string(),
             signature: "sig1".to_string(),
             status: TaskStatus::Pending,
-            scan_mode: ScanMode::Regex { pattern: "^[a-z]{3}$".to_string() },
+            scan_mode: ScanMode::Regex {
+                pattern: "^[a-z]{3}$".to_string(),
+            },
             config_json: "{}".to_string(),
             tlds: vec![".com".to_string()],
             prefix_pattern: None,
+            concurrency: 50,
+            proxy_id: None,
             total_count: 100,
             completed_count: 0,
             completed_index: 0,
@@ -213,6 +237,7 @@ mod tests {
         ScanItem {
             id: 0,
             task_id: "task1".to_string(),
+            run_id: "run1".to_string(),
             domain: domain.to_string(),
             tld: ".com".to_string(),
             item_index: index,
@@ -247,7 +272,7 @@ mod tests {
             .collect();
         let count = repo.batch_insert(&items).unwrap();
         assert_eq!(count, 10);
-        assert_eq!(repo.count_by_task("task1", None).unwrap(), 10);
+        assert_eq!(repo.count_by_task("task1", Some("run1"), None).unwrap(), 10);
     }
 
     #[test]
@@ -256,7 +281,15 @@ mod tests {
         create_test_task(&conn);
         let repo = ScanItemRepo::new(&conn);
         let id = repo.create(&make_scan_item(0, "abc.com")).unwrap();
-        repo.update_status(id, &ScanItemStatus::Available, Some(true), Some("rdap"), Some(150), None).unwrap();
+        repo.update_status(
+            id,
+            &ScanItemStatus::Available,
+            Some(true),
+            Some("rdap"),
+            Some(150),
+            None,
+        )
+        .unwrap();
         let fetched = repo.get_by_id(id).unwrap().unwrap();
         assert_eq!(fetched.status, ScanItemStatus::Available);
         assert_eq!(fetched.is_available, Some(true));
@@ -274,7 +307,9 @@ mod tests {
             .map(|i| make_scan_item(i, &format!("d{}.com", i)))
             .collect();
         repo.batch_insert(&items).unwrap();
-        let listed = repo.list_by_task("task1", None, 100, 0).unwrap();
+        let listed = repo
+            .list_by_task("task1", Some("run1"), None, 100, 0)
+            .unwrap();
         assert_eq!(listed.len(), 5);
     }
 
@@ -285,8 +320,24 @@ mod tests {
         let repo = ScanItemRepo::new(&conn);
         let id = repo.create(&make_scan_item(0, "abc.com")).unwrap();
         repo.create(&make_scan_item(1, "def.com")).unwrap();
-        repo.update_status(id, &ScanItemStatus::Available, Some(true), Some("rdap"), None, None).unwrap();
-        let available = repo.list_by_task("task1", Some(&ScanItemStatus::Available), 100, 0).unwrap();
+        repo.update_status(
+            id,
+            &ScanItemStatus::Available,
+            Some(true),
+            Some("rdap"),
+            None,
+            None,
+        )
+        .unwrap();
+        let available = repo
+            .list_by_task(
+                "task1",
+                Some("run1"),
+                Some(&ScanItemStatus::Available),
+                100,
+                0,
+            )
+            .unwrap();
         assert_eq!(available.len(), 1);
         assert_eq!(available[0].domain, "abc.com");
     }
@@ -300,8 +351,12 @@ mod tests {
             .map(|i| make_scan_item(i, &format!("d{}.com", i)))
             .collect();
         repo.batch_insert(&items).unwrap();
-        let page1 = repo.list_by_task("task1", None, 3, 0).unwrap();
-        let page2 = repo.list_by_task("task1", None, 3, 3).unwrap();
+        let page1 = repo
+            .list_by_task("task1", Some("run1"), None, 3, 0)
+            .unwrap();
+        let page2 = repo
+            .list_by_task("task1", Some("run1"), None, 3, 3)
+            .unwrap();
         assert_eq!(page1.len(), 3);
         assert_eq!(page2.len(), 3);
     }
@@ -315,8 +370,25 @@ mod tests {
             .map(|i| make_scan_item(i, &format!("d{}.com", i)))
             .collect();
         repo.batch_insert(&items).unwrap();
-        assert_eq!(repo.count_by_task("task1", None).unwrap(), 5);
-        assert_eq!(repo.count_by_task("task1", Some(&ScanItemStatus::Pending)).unwrap(), 5);
+        assert_eq!(repo.count_by_task("task1", Some("run1"), None).unwrap(), 5);
+        assert_eq!(
+            repo.count_by_task("task1", Some("run1"), Some(&ScanItemStatus::Pending))
+                .unwrap(),
+            5
+        );
+    }
+
+    #[test]
+    fn test_delete_by_task() {
+        let (conn, _temp) = setup();
+        create_test_task(&conn);
+        let repo = ScanItemRepo::new(&conn);
+        let items: Vec<ScanItem> = (0..3)
+            .map(|i| make_scan_item(i, &format!("d{}.com", i)))
+            .collect();
+        repo.batch_insert(&items).unwrap();
+        repo.delete_by_task("task1").unwrap();
+        assert_eq!(repo.count_by_task("task1", Some("run1"), None).unwrap(), 0);
     }
 
     #[test]
@@ -338,7 +410,9 @@ mod tests {
         let (conn, _temp) = setup();
         create_test_task(&conn);
         let repo = ScanItemRepo::new(&conn);
-        let result = repo.list_by_task("task1", None, 100, 0).unwrap();
+        let result = repo
+            .list_by_task("task1", Some("run1"), None, 100, 0)
+            .unwrap();
         assert!(result.is_empty());
     }
 }

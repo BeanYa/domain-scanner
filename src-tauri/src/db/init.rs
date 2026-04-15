@@ -1,8 +1,24 @@
 use rusqlite::Connection;
+use std::sync::{Once, OnceLock};
+
+static VEC_EXT_INIT: Once = Once::new();
+static DB_PATH: OnceLock<String> = OnceLock::new();
+
+/// Set the persistent database file path (call once during app setup).
+pub fn set_db_path(path: String) {
+    DB_PATH.set(path).expect("Database path already set");
+}
+
+/// Open a connection to the persistent database.
+/// Falls back to `:memory:` if `set_db_path` was never called (e.g. in tests).
+pub fn open_db() -> Result<Connection, Box<dyn std::error::Error>> {
+    let path = DB_PATH.get().map(|s| s.as_str()).unwrap_or(":memory:");
+    open_and_init(path)
+}
 
 /// Register the sqlite-vec extension for all new connections
 pub fn register_vec_extension() {
-    unsafe {
+    VEC_EXT_INIT.call_once(|| unsafe {
         rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute::<
             unsafe extern "C" fn(),
             unsafe extern "C" fn(
@@ -11,7 +27,7 @@ pub fn register_vec_extension() {
                 *const rusqlite::ffi::sqlite3_api_routines,
             ) -> i32,
         >(sqlite_vec::sqlite3_vec_init)));
-    }
+    });
 }
 
 /// Initialize all database tables, indexes, and extensions
@@ -41,6 +57,8 @@ pub fn init_database(conn: &Connection) -> Result<(), Box<dyn std::error::Error>
             config_json TEXT NOT NULL,
             tlds TEXT NOT NULL,
             prefix_pattern TEXT,
+            concurrency INTEGER DEFAULT 50,
+            proxy_id INTEGER,
             total_count INTEGER DEFAULT 0,
             completed_count INTEGER DEFAULT 0,
             completed_index INTEGER DEFAULT 0,
@@ -53,9 +71,25 @@ pub fn init_database(conn: &Connection) -> Result<(), Box<dyn std::error::Error>
         CREATE INDEX IF NOT EXISTS idx_tasks_batch ON tasks(batch_id);
         CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 
+        CREATE TABLE IF NOT EXISTS task_runs (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL REFERENCES tasks(id),
+            run_number INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            total_count INTEGER DEFAULT 0,
+            completed_count INTEGER DEFAULT 0,
+            available_count INTEGER DEFAULT 0,
+            error_count INTEGER DEFAULT 0,
+            started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            finished_at DATETIME,
+            UNIQUE(task_id, run_number)
+        );
+        CREATE INDEX IF NOT EXISTS idx_task_runs_task_started ON task_runs(task_id, started_at DESC);
+
         CREATE TABLE IF NOT EXISTS scan_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             task_id TEXT NOT NULL REFERENCES tasks(id),
+            run_id TEXT NOT NULL,
             domain TEXT NOT NULL,
             tld TEXT NOT NULL,
             item_index INTEGER NOT NULL,
@@ -65,18 +99,19 @@ pub fn init_database(conn: &Connection) -> Result<(), Box<dyn std::error::Error>
             response_time_ms INTEGER,
             error_message TEXT,
             checked_at DATETIME,
-            UNIQUE(task_id, domain)
+            UNIQUE(task_id, run_id, domain)
         );
-        CREATE INDEX IF NOT EXISTS idx_scan_items_task_status ON scan_items(task_id, status);
+        CREATE INDEX IF NOT EXISTS idx_scan_items_task_status ON scan_items(task_id, run_id, status);
 
         CREATE TABLE IF NOT EXISTS task_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             task_id TEXT NOT NULL REFERENCES tasks(id),
+            run_id TEXT,
             level TEXT NOT NULL DEFAULT 'info',
             message TEXT NOT NULL,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
-        CREATE INDEX IF NOT EXISTS idx_task_logs_task ON task_logs(task_id);
+        CREATE INDEX IF NOT EXISTS idx_task_logs_task ON task_logs(task_id, run_id);
 
         CREATE TABLE IF NOT EXISTS proxies (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -127,7 +162,20 @@ pub fn init_database(conn: &Connection) -> Result<(), Box<dyn std::error::Error>
         [],
     )?;
 
+    // Migrations: add columns that may be missing from older schema
+    migrate_add_column(conn, "tasks", "concurrency", "INTEGER DEFAULT 50");
+    migrate_add_column(conn, "tasks", "proxy_id", "INTEGER");
+    migrate_add_column(conn, "scan_items", "run_id", "TEXT");
+    migrate_add_column(conn, "task_logs", "run_id", "TEXT");
+
     Ok(())
+}
+
+/// Safely add a column if it doesn't already exist (idempotent migration)
+fn migrate_add_column(conn: &Connection, table: &str, column: &str, col_type: &str) {
+    let sql = format!("ALTER TABLE {} ADD COLUMN {} {}", table, column, col_type);
+    // "duplicate column name" error means it already exists — that's fine
+    let _ = conn.execute(&sql, []);
 }
 
 /// Open a database connection and initialize schema
@@ -167,6 +215,7 @@ mod tests {
         assert!(tables.contains(&"task_batches".to_string()));
         assert!(tables.contains(&"scan_items".to_string()));
         assert!(tables.contains(&"task_logs".to_string()));
+        assert!(tables.contains(&"task_runs".to_string()));
         assert!(tables.contains(&"proxies".to_string()));
         assert!(tables.contains(&"llm_configs".to_string()));
         assert!(tables.contains(&"gpu_configs".to_string()));
@@ -191,6 +240,7 @@ mod tests {
         assert!(indexes.contains(&"idx_tasks_status".to_string()));
         assert!(indexes.contains(&"idx_scan_items_task_status".to_string()));
         assert!(indexes.contains(&"idx_task_logs_task".to_string()));
+        assert!(indexes.contains(&"idx_task_runs_task_started".to_string()));
         assert!(indexes.contains(&"idx_filtered_results_task".to_string()));
     }
 
@@ -209,11 +259,9 @@ mod tests {
         let (conn, _temp) = setup_test_db();
 
         let backend: String = conn
-            .query_row(
-                "SELECT backend FROM gpu_configs WHERE id = 1",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT backend FROM gpu_configs WHERE id = 1", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(backend, "auto");
     }

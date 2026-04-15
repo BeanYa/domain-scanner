@@ -9,10 +9,11 @@ interface TaskStore {
   selectedBatchId: string | null;
 
   fetchTasks: (status?: TaskStatus, batchId?: string) => Promise<void>;
-  createTasks: (name: string, scanMode: ScanMode, tlds: string[], batchName?: string) => Promise<BatchCreateResult>;
+  createTasks: (name: string, scanMode: ScanMode, tlds: string[], batchName?: string, concurrency?: number, proxyId?: number) => Promise<BatchCreateResult>;
   startTask: (taskId: string) => Promise<void>;
   pauseTask: (taskId: string) => Promise<void>;
   resumeTask: (taskId: string) => Promise<void>;
+  rerunTask: (taskId: string) => Promise<string>;
   deleteTask: (taskId: string) => Promise<void>;
   setSelectedBatchId: (id: string | null) => void;
 }
@@ -28,7 +29,7 @@ export const useTaskStore = create<TaskStore>((set) => ({
     try {
       const result = await invokeCommand<string>("list_tasks", {
         request: {
-          status: status ? JSON.stringify(status) : null,
+          status: status ?? null,
           batch_id: batchId || null,
           limit: 1000,
           offset: 0,
@@ -41,11 +42,18 @@ export const useTaskStore = create<TaskStore>((set) => ({
     }
   },
 
-  createTasks: async (name: string, scanMode: ScanMode, tlds: string[], batchName?: string) => {
+  createTasks: async (name: string, scanMode: ScanMode, tlds: string[], batchName?: string, concurrency?: number, proxyId?: number) => {
     set({ loading: true, error: null });
     try {
       const result = await invokeCommand<BatchCreateResult>("create_tasks", {
-        request: { name, scan_mode: scanMode, tlds, batch_name: batchName },
+        request: {
+          name,
+          scan_mode: scanMode,
+          tlds,
+          batch_name: batchName,
+          concurrency: concurrency || 50,
+          proxy_id: proxyId || null,
+        },
       });
       set({ loading: false });
       return result;
@@ -57,34 +65,47 @@ export const useTaskStore = create<TaskStore>((set) => ({
 
   startTask: async (taskId: string) => {
     try {
-      await invokeCommand("start_task", { task_id: taskId });
+      await invokeCommand("start_task", { taskId });
     } catch (e) {
       set({ error: String(e) });
+      throw e;
     }
   },
 
   pauseTask: async (taskId: string) => {
     try {
-      await invokeCommand("pause_task", { task_id: taskId });
+      await invokeCommand("pause_task", { taskId });
     } catch (e) {
       set({ error: String(e) });
+      throw e;
     }
   },
 
   resumeTask: async (taskId: string) => {
     try {
-      await invokeCommand("resume_task", { task_id: taskId });
+      await invokeCommand("resume_task", { taskId });
     } catch (e) {
       set({ error: String(e) });
+      throw e;
+    }
+  },
+
+  rerunTask: async (taskId: string) => {
+    try {
+      return await invokeCommand<string>("rerun_task", { taskId });
+    } catch (e) {
+      set({ error: String(e) });
+      throw e;
     }
   },
 
   deleteTask: async (taskId: string) => {
     try {
-      await invokeCommand("delete_task", { task_id: taskId });
+      await invokeCommand("delete_task", { taskId });
       set((state) => ({ tasks: state.tasks.filter((t) => t.id !== taskId) }));
     } catch (e) {
       set({ error: String(e) });
+      throw e;
     }
   },
 
