@@ -15,6 +15,14 @@ interface TaskStore {
   resumeTask: (taskId: string) => Promise<void>;
   rerunTask: (taskId: string) => Promise<string>;
   deleteTask: (taskId: string) => Promise<void>;
+  applyTaskProgress: (progress: {
+    task_id: string;
+    completed_count: number;
+    total_count: number;
+    available_count: number;
+    error_count: number;
+  }) => void;
+  applyTaskStatus: (taskId: string, status: TaskStatus) => void;
   setSelectedBatchId: (id: string | null) => void;
 }
 
@@ -108,6 +116,33 @@ export const useTaskStore = create<TaskStore>((set) => ({
       throw e;
     }
   },
+
+  applyTaskProgress: (progress) =>
+    set((state) => ({
+      tasks: state.tasks.map((task) =>
+        task.id === progress.task_id
+          ? {
+              ...task,
+              completed_count: progress.completed_count,
+              total_count: progress.total_count,
+              available_count: progress.available_count,
+              error_count: progress.error_count,
+            }
+          : task
+      ),
+    })),
+
+  applyTaskStatus: (taskId: string, status: TaskStatus) =>
+    set((state) => ({
+      tasks: state.tasks.map((task) =>
+        task.id === taskId
+          ? {
+              ...task,
+              status,
+            }
+          : task
+      ),
+    })),
 
   setSelectedBatchId: (id: string | null) => set({ selectedBatchId: id }),
 }));

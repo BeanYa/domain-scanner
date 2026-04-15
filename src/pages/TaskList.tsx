@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useState } from "react";
 import {
   Search,
   ChevronDown,
@@ -8,9 +8,12 @@ import {
   Inbox,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { useTaskEvents } from "../hooks/useTaskEvents";
 import { useTaskStore } from "../store/taskStore";
 import { useBatchStore } from "../store/batchStore";
 import type { TaskStatus } from "../types";
+
+const TASK_LIST_POLL_INTERVAL_MS = 15000;
 
 const statusConfig: Record<TaskStatus, { label: string; dotClass: string; badgeClass: string; color: string }> = {
   running:   { label: "运行中", dotClass: "status-dot-running", badgeClass: "badge-green",   color: "text-cyber-green" },
@@ -23,21 +26,61 @@ export default function TaskList() {
   const navigate = useNavigate();
   const [search, setSearch] = useState("");
   const [expandedBatches, setExpandedBatches] = useState<Set<string>>(new Set());
-  const { tasks, fetchTasks } = useTaskStore();
+  const { tasks, fetchTasks, applyTaskProgress, applyTaskStatus } = useTaskStore();
   const { batches, fetchBatches } = useBatchStore();
 
   useEffect(() => {
     fetchBatches();
     fetchTasks();
-  }, []);
+  }, [fetchBatches, fetchTasks]);
+
+  const handleProgress = useCallback(
+    (event: {
+      task_id: string;
+      completed_count: number;
+      total_count: number;
+      available_count: number;
+      error_count: number;
+    }) => {
+      startTransition(() => {
+        applyTaskProgress(event);
+      });
+    },
+    [applyTaskProgress]
+  );
+
+  const handleStatusChange = useCallback(
+    (event: { task_id: string; status: string }) => {
+      const knownStatuses = new Set<TaskStatus>([
+        "pending",
+        "running",
+        "paused",
+        "completed",
+      ]);
+      if (!knownStatuses.has(event.status as TaskStatus)) {
+        return;
+      }
+
+      startTransition(() => {
+        applyTaskStatus(event.task_id, event.status as TaskStatus);
+      });
+    },
+    [applyTaskStatus]
+  );
+
+  useTaskEvents(handleProgress, handleStatusChange);
+
+  const hasRunning = useMemo(
+    () => tasks.some((task) => task.status === "running"),
+    [tasks]
+  );
 
   // Auto-refresh while any task is running
   useEffect(() => {
-    const hasRunning = tasks.some((t) => t.status === "running");
     if (!hasRunning) return;
-    const interval = setInterval(() => fetchTasks(), 3000);
+    const interval = setInterval(() => fetchTasks(), TASK_LIST_POLL_INTERVAL_MS);
     return () => clearInterval(interval);
-  }, [tasks]);
+  }, [hasRunning, fetchTasks]);
 
   // Group tasks by batch_id
   const batchMap = new Map<string, typeof tasks>();

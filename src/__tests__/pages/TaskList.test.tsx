@@ -11,6 +11,26 @@ vi.mock("../../services/tauri", () => ({
   listenEvent: vi.fn(),
 }));
 
+type EventHandler = (payload: unknown) => void;
+
+const eventHandlers = new Map<string, EventHandler[]>();
+
+function registerEventHandler(event: string, handler: EventHandler) {
+  const current = eventHandlers.get(event) ?? [];
+  current.push(handler);
+  eventHandlers.set(event, current);
+  return () => {
+    const next = (eventHandlers.get(event) ?? []).filter((entry) => entry !== handler);
+    eventHandlers.set(event, next);
+  };
+}
+
+function emitEvent(event: string, payload: unknown) {
+  for (const handler of eventHandlers.get(event) ?? []) {
+    handler(payload);
+  }
+}
+
 function makeTask(status: Task["status"]): Task {
   return {
     id: `task-${status}`,
@@ -40,9 +60,14 @@ function makeTask(status: Task["status"]): Task {
 describe("TaskList polling", () => {
   beforeEach(async () => {
     vi.useFakeTimers();
+    eventHandlers.clear();
     useBatchStore.setState({ batches: [], loading: false, error: null });
 
-    const { invokeCommand } = await import("../../services/tauri");
+    const { invokeCommand, listenEvent } = await import("../../services/tauri");
+    (listenEvent as ReturnType<typeof vi.fn>).mockImplementation(
+      async (event: string, handler: EventHandler) =>
+        registerEventHandler(event, handler)
+    );
     (invokeCommand as ReturnType<typeof vi.fn>).mockImplementation(
       async (command: string) => {
         if (command === "list_batches") {
@@ -88,7 +113,7 @@ describe("TaskList polling", () => {
 
     (invokeCommand as ReturnType<typeof vi.fn>).mockClear();
     await act(async () => {
-      vi.advanceTimersByTime(3000);
+      vi.advanceTimersByTime(15000);
       await Promise.resolve();
     });
 
@@ -122,10 +147,54 @@ describe("TaskList polling", () => {
 
     (invokeCommand as ReturnType<typeof vi.fn>).mockClear();
     await act(async () => {
-      vi.advanceTimersByTime(3000);
+      vi.advanceTimersByTime(15000);
       await Promise.resolve();
     });
 
+    expect(invokeCommand).not.toHaveBeenCalledWith("list_tasks", expect.anything());
+  });
+
+  it("updates task status and progress from events without forcing a full refetch", async () => {
+    useTaskStore.setState({
+      tasks: [makeTask("running")],
+      loading: false,
+      error: null,
+      selectedBatchId: null,
+    });
+
+    const { invokeCommand } = await import("../../services/tauri");
+
+    render(
+      <MemoryRouter>
+        <TaskList />
+      </MemoryRouter>
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    (invokeCommand as ReturnType<typeof vi.fn>).mockClear();
+
+    await act(async () => {
+      emitEvent("scan-progress", {
+        task_id: "task-running",
+        run_id: "run-1",
+        completed_count: 500,
+        total_count: 1000,
+        available_count: 11,
+        error_count: 2,
+      });
+      emitEvent("task-status-change", {
+        task_id: "task-running",
+        status: "completed",
+      });
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("50%")).toBeInTheDocument();
+    expect(screen.getByText("已完成")).toBeInTheDocument();
     expect(invokeCommand).not.toHaveBeenCalledWith("list_tasks", expect.anything());
   });
 });

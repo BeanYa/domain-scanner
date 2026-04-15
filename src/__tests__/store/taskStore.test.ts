@@ -94,4 +94,77 @@ describe("taskStore", () => {
     expect(useTaskStore.getState().tasks).toHaveLength(1);
     expect(useTaskStore.getState().tasks[0].id).toBe("task-2");
   });
+
+  it("should apply task progress without refetching the list", () => {
+    useTaskStore.setState({
+      tasks: [
+        {
+          id: "task-1",
+          batch_id: null,
+          name: "Progress Task",
+          signature: "sig-progress",
+          status: "running",
+          scan_mode: { type: "regex", pattern: "^[a-z]{3}$" },
+          config_json: "{}",
+          tlds: [".com"],
+          prefix_pattern: null,
+          concurrency: 50,
+          proxy_id: null,
+          total_count: 1000,
+          completed_count: 100,
+          completed_index: 100,
+          available_count: 3,
+          error_count: 1,
+          created_at: "2026-01-01",
+          updated_at: "2026-01-01",
+          primaryTld() { return this.tlds[0]; },
+        },
+      ],
+    });
+
+    useTaskStore.getState().applyTaskProgress({
+      task_id: "task-1",
+      completed_count: 500,
+      total_count: 1000,
+      available_count: 11,
+      error_count: 4,
+    });
+
+    const task = useTaskStore.getState().tasks[0];
+    expect(task.completed_count).toBe(500);
+    expect(task.available_count).toBe(11);
+    expect(task.error_count).toBe(4);
+  });
+
+  it("should apply task status changes from events", () => {
+    useTaskStore.setState({
+      tasks: [
+        {
+          id: "task-1",
+          batch_id: null,
+          name: "Status Task",
+          signature: "sig-status",
+          status: "running",
+          scan_mode: { type: "regex", pattern: "^[a-z]{3}$" },
+          config_json: "{}",
+          tlds: [".com"],
+          prefix_pattern: null,
+          concurrency: 50,
+          proxy_id: null,
+          total_count: 1000,
+          completed_count: 100,
+          completed_index: 100,
+          available_count: 3,
+          error_count: 1,
+          created_at: "2026-01-01",
+          updated_at: "2026-01-01",
+          primaryTld() { return this.tlds[0]; },
+        },
+      ],
+    });
+
+    useTaskStore.getState().applyTaskStatus("task-1", "completed");
+
+    expect(useTaskStore.getState().tasks[0].status).toBe("completed");
+  });
 });
