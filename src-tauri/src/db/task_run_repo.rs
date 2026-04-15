@@ -53,6 +53,18 @@ impl<'a> TaskRunRepo<'a> {
         }
     }
 
+    pub fn get_by_id(&self, run_id: &str) -> Result<Option<TaskRun>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, task_id, run_number, status, total_count, completed_count, available_count, error_count, started_at, finished_at
+             FROM task_runs WHERE id = ?1 LIMIT 1"
+        )?;
+        let mut rows = stmt.query([run_id])?;
+        match rows.next()? {
+            Some(row) => Ok(Some(self.row_to_run(row)?)),
+            None => Ok(None),
+        }
+    }
+
     pub fn next_run_number(&self, task_id: &str) -> Result<i64, rusqlite::Error> {
         let latest: Option<i64> = self.conn.query_row(
             "SELECT MAX(run_number) FROM task_runs WHERE task_id = ?1",
@@ -91,6 +103,12 @@ impl<'a> TaskRunRepo<'a> {
             "UPDATE task_runs SET completed_count = ?1, available_count = ?2, error_count = ?3 WHERE id = ?4",
             rusqlite::params![completed_count, available_count, error_count, run_id],
         )?;
+        Ok(())
+    }
+
+    pub fn delete_by_task(&self, task_id: &str) -> Result<(), rusqlite::Error> {
+        self.conn
+            .execute("DELETE FROM task_runs WHERE task_id = ?1", [task_id])?;
         Ok(())
     }
 
@@ -188,5 +206,27 @@ mod tests {
         assert_eq!(repo.next_run_number("task1").unwrap(), 1);
         repo.create(&make_run("run1", 1)).unwrap();
         assert_eq!(repo.next_run_number("task1").unwrap(), 2);
+    }
+
+    #[test]
+    fn test_delete_by_task() {
+        let (conn, _temp) = setup();
+        create_test_task(&conn);
+        let repo = TaskRunRepo::new(&conn);
+        repo.create(&make_run("run1", 1)).unwrap();
+        repo.create(&make_run("run2", 2)).unwrap();
+        repo.delete_by_task("task1").unwrap();
+        assert!(repo.list_by_task("task1").unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_get_by_id() {
+        let (conn, _temp) = setup();
+        create_test_task(&conn);
+        let repo = TaskRunRepo::new(&conn);
+        repo.create(&make_run("run1", 1)).unwrap();
+        let run = repo.get_by_id("run1").unwrap().unwrap();
+        assert_eq!(run.id, "run1");
+        assert_eq!(run.run_number, 1);
     }
 }

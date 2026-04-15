@@ -162,6 +162,7 @@ pub fn delete_task(
     let filter_repo = FilterRepo::new(&conn);
     let log_repo = LogRepo::new(&conn);
     let scan_item_repo = ScanItemRepo::new(&conn);
+    let task_run_repo = TaskRunRepo::new(&conn);
     let task_repo = TaskRepo::new(&conn);
 
     filter_repo
@@ -171,6 +172,9 @@ pub fn delete_task(
         .delete_by_task(&task_id)
         .map_err(|e| e.to_string())?;
     scan_item_repo
+        .delete_by_task(&task_id)
+        .map_err(|e| e.to_string())?;
+    task_run_repo
         .delete_by_task(&task_id)
         .map_err(|e| e.to_string())?;
     task_repo.delete(&task_id).map_err(|e| e.to_string())?;
@@ -234,6 +238,7 @@ pub fn list_tasks(request: ListTasksRequest) -> Result<String, String> {
 pub fn list_scan_items(request: ListScanItemsRequest) -> Result<String, String> {
     let conn = init::open_db().map_err(|e| e.to_string())?;
     let repo = ScanItemRepo::new(&conn);
+    let run_repo = TaskRunRepo::new(&conn);
     let limit = request.limit.unwrap_or(10).max(1);
     let offset = request.offset.unwrap_or(0).max(0);
 
@@ -252,9 +257,25 @@ pub fn list_scan_items(request: ListScanItemsRequest) -> Result<String, String> 
             offset,
         )
         .map_err(|e| e.to_string())?;
-    let total = repo
-        .count_by_task(&request.task_id, request.run_id.as_deref(), status.as_ref())
-        .map_err(|e| e.to_string())?;
+    let total = if status.is_none() {
+        match request.run_id.as_deref() {
+            Some(run_id) => run_repo
+                .get_by_id(run_id)
+                .map_err(|e| e.to_string())?
+                .filter(|run| run.task_id == request.task_id)
+                .map(|run| run.completed_count)
+                .unwrap_or(0),
+            None => {
+                let runs = run_repo
+                    .list_by_task(&request.task_id)
+                    .map_err(|e| e.to_string())?;
+                runs.into_iter().map(|run| run.completed_count).sum()
+            }
+        }
+    } else {
+        repo.count_by_task(&request.task_id, request.run_id.as_deref(), status.as_ref())
+            .map_err(|e| e.to_string())?
+    };
 
     serde_json::to_string(&PaginatedResponse {
         items,

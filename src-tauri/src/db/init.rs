@@ -102,6 +102,7 @@ pub fn init_database(conn: &Connection) -> Result<(), Box<dyn std::error::Error>
             UNIQUE(task_id, run_id, domain)
         );
         CREATE INDEX IF NOT EXISTS idx_scan_items_task_status ON scan_items(task_id, run_id, status);
+        CREATE INDEX IF NOT EXISTS idx_scan_items_task_checked ON scan_items(task_id, run_id, checked_at DESC, id DESC);
 
         CREATE TABLE IF NOT EXISTS task_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

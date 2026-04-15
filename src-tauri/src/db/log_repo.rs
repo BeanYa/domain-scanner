@@ -120,6 +120,8 @@ impl<'a> LogRepo<'a> {
 
     /// Delete all logs for a task
     pub fn delete_by_task(&self, task_id: &str) -> Result<(), rusqlite::Error> {
+        self.conn
+            .execute("DELETE FROM task_logs WHERE task_id = ?1", [task_id])?;
         let task_dir = self.logs_root().join(task_id);
         if task_dir.exists() {
             fs::remove_dir_all(task_dir).map_err(io_to_rusqlite)?;

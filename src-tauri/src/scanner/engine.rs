@@ -43,6 +43,14 @@ pub struct ScanProgress {
     pub percent: f64,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+struct ScanResultsUpdated {
+    task_id: String,
+    run_id: String,
+    flushed_count: usize,
+    completed_count: i64,
+}
+
 /// Scan engine: orchestrates concurrent domain scanning with checkpoint resume
 pub struct ScanEngine {
     config: EngineConfig,
@@ -127,6 +135,7 @@ impl ScanEngine {
                     available_count,
                     error_count,
                     &mut pending_items,
+                    app,
                 );
                 {
                     let c = conn.lock().map_err(|e| e.to_string())?;
@@ -186,6 +195,7 @@ impl ScanEngine {
                     available_count,
                     error_count,
                     &mut pending_items,
+                    app,
                 );
                 last_persist_at = Instant::now();
             }
@@ -225,6 +235,7 @@ impl ScanEngine {
             available_count,
             error_count,
             &mut pending_items,
+            app,
         );
         {
             let c = conn.lock().map_err(|e| e.to_string())?;
@@ -276,14 +287,25 @@ impl ScanEngine {
         available_count: i64,
         error_count: i64,
         pending_items: &mut Vec<ScanItem>,
+        app: &AppHandle,
     ) {
         if let Ok(c) = conn.lock() {
+            let flushed_count = pending_items.len();
             if !pending_items.is_empty() {
                 let scan_repo = ScanItemRepo::new(&c);
                 if let Err(e) = scan_repo.batch_insert(pending_items) {
                     tracing::error!("Failed to batch insert scan items: {}", e);
                 } else {
                     pending_items.clear();
+                    let _ = app.emit(
+                        "scan-results-updated",
+                        ScanResultsUpdated {
+                            task_id: task_id.to_string(),
+                            run_id: run_id.to_string(),
+                            flushed_count,
+                            completed_count,
+                        },
+                    );
                 }
             }
             let repo = TaskRepo::new(&c);

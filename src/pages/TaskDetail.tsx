@@ -42,6 +42,13 @@ interface ScanProgress {
   percent: number;
 }
 
+interface ScanResultsUpdated {
+  task_id: string;
+  run_id: string;
+  flushed_count: number;
+  completed_count: number;
+}
+
 export default function TaskDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -64,6 +71,7 @@ export default function TaskDetail() {
   const [liveProgress, setLiveProgress] = useState<ScanProgress | null>(null);
   const resultRefreshTimerRef = useRef<number | null>(null);
   const { tasks, fetchTasks, startTask, pauseTask, rerunTask, deleteTask } = useTaskStore();
+  const effectiveRunId = selectedRunId ?? runs[0]?.id ?? null;
 
   const fetchRuns = useCallback(async () => {
     if (!id) return;
@@ -75,9 +83,10 @@ export default function TaskDetail() {
       });
       const parsed = JSON.parse(result) as TaskRun[];
       setRuns(parsed);
+      const nextRunId = parsed[0]?.id ?? null;
       setSelectedRunId((current) => {
         if (current && parsed.some((run) => run.id === current)) return current;
-        return parsed[0]?.id ?? null;
+        return nextRunId;
       });
     } catch (e) {
       setRunsError(String(e));
@@ -87,7 +96,7 @@ export default function TaskDetail() {
   }, [id]);
 
   const fetchResults = useCallback(async () => {
-    if (!id || !selectedRunId) {
+    if (!id || !effectiveRunId) {
       setResults([]);
       setResultTotal(0);
       return;
@@ -98,7 +107,7 @@ export default function TaskDetail() {
       const result = await invokeCommand<string>("list_scan_items", {
         request: {
           task_id: id,
-          run_id: selectedRunId,
+          run_id: effectiveRunId,
           limit: 10,
           offset: (resultPage - 1) * 10,
         },
@@ -111,10 +120,10 @@ export default function TaskDetail() {
     } finally {
       setResultsLoading(false);
     }
-  }, [id, selectedRunId, resultPage]);
+  }, [id, effectiveRunId, resultPage]);
 
   const fetchLogs = useCallback(async () => {
-    if (!id || !selectedRunId) {
+    if (!id || !effectiveRunId) {
       setLogs([]);
       return;
     }
@@ -124,7 +133,7 @@ export default function TaskDetail() {
       const result = await invokeCommand<string>("get_logs", {
         request: {
           task_id: id,
-          run_id: selectedRunId,
+          run_id: effectiveRunId,
           level: logFilter === "all" ? null : logFilter,
           limit: 200,
           offset: 0,
@@ -136,7 +145,7 @@ export default function TaskDetail() {
     } finally {
       setLogsLoading(false);
     }
-  }, [id, selectedRunId, logFilter]);
+  }, [id, effectiveRunId, logFilter]);
 
   useEffect(() => {
     if (tasks.length === 0) fetchTasks();
@@ -177,7 +186,7 @@ export default function TaskDetail() {
             : run
         )
       );
-      if (progress.run_id === selectedRunId && resultPage === 1) {
+      if (progress.run_id === effectiveRunId && resultPage === 1) {
         if (resultRefreshTimerRef.current) {
           window.clearTimeout(resultRefreshTimerRef.current);
         }
@@ -185,6 +194,17 @@ export default function TaskDetail() {
           fetchResults();
         }, 250);
       }
+    });
+    const unlistenResults = listenEvent<ScanResultsUpdated>("scan-results-updated", (payload) => {
+      if (payload.task_id !== id) return;
+      if (payload.run_id !== effectiveRunId || resultPage !== 1) return;
+      setResultTotal((current) => Math.max(current, payload.completed_count));
+      if (resultRefreshTimerRef.current) {
+        window.clearTimeout(resultRefreshTimerRef.current);
+      }
+      resultRefreshTimerRef.current = window.setTimeout(() => {
+        fetchResults();
+      }, 100);
     });
     const unlistenComplete = listenEvent<ScanProgress>("scan-complete", (progress) => {
       if (progress.task_id === id) {
@@ -196,24 +216,25 @@ export default function TaskDetail() {
     });
     return () => {
       unlisten.then(fn => fn());
+      unlistenResults.then(fn => fn());
       unlistenComplete.then(fn => fn());
       if (resultRefreshTimerRef.current) {
         window.clearTimeout(resultRefreshTimerRef.current);
       }
     };
-  }, [id, selectedRunId, resultPage, fetchTasks, fetchRuns, fetchResults, fetchLogs]);
+  }, [id, effectiveRunId, resultPage, fetchTasks, fetchRuns, fetchResults, fetchLogs]);
 
   useEffect(() => {
     const unlisten = listenEvent<LogEntry>("task-log-created", (log) => {
       if (log.task_id !== id) return;
-      if (selectedRunId && log.run_id !== selectedRunId) return;
+      if (effectiveRunId && log.run_id !== effectiveRunId) return;
       if (logFilter !== "all" && log.level !== logFilter) return;
       setLogs((current) => [log, ...current.filter((entry) => entry.id !== log.id)].slice(0, 200));
     });
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [id, selectedRunId, logFilter]);
+  }, [id, effectiveRunId, logFilter]);
 
   // Auto-refresh while task is running (fallback for missed events)
   useEffect(() => {
@@ -322,7 +343,7 @@ export default function TaskDetail() {
   }
 
   const summary =
-    liveProgress && liveProgress.run_id === selectedRunId
+    liveProgress && liveProgress.run_id === effectiveRunId
       ? liveProgress
       : selectedRun ?? {
     total_count: task.total_count,
