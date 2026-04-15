@@ -1,15 +1,28 @@
-import { useState } from "react";
-import { Cpu, Play, HardDrive, Gauge, Clock, CheckCircle, AlertTriangle } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Cpu, Play, HardDrive, Gauge, Clock, Inbox } from "lucide-react";
+import { useGpuStore } from "../store/gpuStore";
+import { useTaskStore } from "../store/taskStore";
 
 export default function VectorizePage() {
   const [selectedTask, setSelectedTask] = useState("");
   const [isRunning, setIsRunning] = useState(false);
+  const { status: gpuStatus, fetchStatus: fetchGpuStatus } = useGpuStore();
+  const { tasks, fetchTasks } = useTaskStore();
 
-  const tasks = [
-    { id: "t1", name: "4字母 .com 扫描", available: 1234 },
-    { id: "t2", name: "AI 相关 .io 扫描", available: 89 },
-    { id: "t3", name: "品牌词 .com 扫描", available: 412 },
-  ];
+  useEffect(() => {
+    fetchGpuStatus();
+    fetchTasks();
+  }, []);
+
+  const completedTasks = tasks.filter(t => t.status === "completed" && t.available_count > 0);
+
+  const gpuBackendLabel = gpuStatus?.available
+    ? gpuStatus.backend === "cuda" ? "CUDA"
+    : gpuStatus.backend === "directml" ? "DirectML"
+    : gpuStatus.backend === "cpu" ? "CPU"
+    : gpuStatus.backend
+    : "CPU";
+  const gpuDeviceName = gpuStatus?.device_name || "CPU Only";
 
   return (
     <div className="p-6 space-y-6 max-w-4xl">
@@ -26,18 +39,22 @@ export default function VectorizePage() {
             <Cpu className="w-4 h-4 text-cyber-green" />
             GPU 状态
           </h2>
-          <span className="text-xs px-2 py-0.5 rounded-full bg-cyber-green/10 text-cyber-green">
-            就绪
+          <span className={`text-xs px-2 py-0.5 rounded-full ${
+            gpuStatus?.available && gpuStatus.backend !== "cpu"
+              ? "bg-cyber-green/10 text-cyber-green"
+              : "bg-cyber-orange/10 text-cyber-orange"
+          }`}>
+            {gpuStatus?.available && gpuStatus.backend !== "cpu" ? "GPU 已启用" : "CPU 模式"}
           </span>
         </div>
         <div className="grid grid-cols-4 gap-4">
           <div className="p-3 rounded-lg bg-cyber-bg/50">
             <p className="text-[10px] text-cyber-muted mb-1">当前后端</p>
-            <p className="text-sm font-semibold text-cyber-text">CPU</p>
+            <p className="text-sm font-semibold text-cyber-text">{gpuBackendLabel}</p>
           </div>
           <div className="p-3 rounded-lg bg-cyber-bg/50">
             <p className="text-[10px] text-cyber-muted mb-1">设备名称</p>
-            <p className="text-sm font-semibold text-cyber-text">CPU Only</p>
+            <p className="text-sm font-semibold text-cyber-text">{gpuDeviceName}</p>
           </div>
           <div className="p-3 rounded-lg bg-cyber-bg/50">
             <p className="text-[10px] text-cyber-muted mb-1">模型</p>
@@ -48,38 +65,48 @@ export default function VectorizePage() {
             <p className="text-sm font-semibold text-cyber-text">384</p>
           </div>
         </div>
-        <div className="mt-3 flex items-center gap-2 text-xs text-cyber-muted">
-          <AlertTriangle className="w-3.5 h-3.5 text-cyber-orange" />
-          <span>未检测到 GPU，将使用 CPU 推理。可在设置中配置 GPU 后端加速。</span>
-        </div>
+        {(!gpuStatus?.available || gpuStatus.backend === "cpu") && (
+          <div className="mt-3 flex items-center gap-2 text-xs text-cyber-muted">
+            <Cpu className="w-3.5 h-3.5 text-cyber-orange" />
+            <span>未检测到 GPU，将使用 CPU 推理。可在设置中配置 GPU 后端加速。</span>
+          </div>
+        )}
       </div>
 
       {/* Task Selection */}
       <div className="glass-panel p-5 space-y-4">
         <h2 className="text-sm font-semibold text-cyber-text">选择源任务</h2>
-        <div className="space-y-2">
-          {tasks.map((task) => (
-            <label
-              key={task.id}
-              className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-all ${
-                selectedTask === task.id
-                  ? "bg-cyber-green/10 border border-cyber-green/30"
-                  : "bg-cyber-bg/50 border border-cyber-border/20 hover:border-cyber-border/40"
-              }`}
-            >
-              <input
-                type="radio"
-                name="task"
-                value={task.id}
-                checked={selectedTask === task.id}
-                onChange={(e) => setSelectedTask(e.target.value)}
-                className="accent-cyber-green"
-              />
-              <span className="text-sm text-cyber-text font-medium">{task.name}</span>
-              <span className="text-xs text-cyber-muted ml-auto">{task.available} 个可用域名</span>
-            </label>
-          ))}
-        </div>
+        {completedTasks.length === 0 ? (
+          <div className="text-center py-8 text-cyber-muted">
+            <Inbox className="w-10 h-10 mx-auto mb-3 opacity-40" />
+            <p className="text-sm">暂无已完成且含可用域名的任务</p>
+            <p className="text-xs text-cyber-muted-dim mt-1">请先完成扫描任务</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {completedTasks.map((task) => (
+              <label
+                key={task.id}
+                className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-all ${
+                  selectedTask === task.id
+                    ? "bg-cyber-green/10 border border-cyber-green/30"
+                    : "bg-cyber-bg/50 border border-cyber-border/20 hover:border-cyber-border/40"
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="task"
+                  value={task.id}
+                  checked={selectedTask === task.id}
+                  onChange={(e) => setSelectedTask(e.target.value)}
+                  className="accent-cyber-green"
+                />
+                <span className="text-sm text-cyber-text font-medium">{task.name}</span>
+                <span className="text-xs text-cyber-muted ml-auto">{task.available_count} 个可用域名</span>
+              </label>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Progress */}
@@ -103,17 +130,17 @@ export default function VectorizePage() {
               <div className="flex items-center gap-2">
                 <HardDrive className="w-3.5 h-3.5 text-cyber-muted" />
                 <span className="text-cyber-muted">已处理:</span>
-                <span className="text-cyber-text font-medium">432 / 1,234</span>
+                <span className="text-cyber-text font-medium">0 / 0</span>
               </div>
               <div className="flex items-center gap-2">
                 <Gauge className="w-3.5 h-3.5 text-cyber-muted" />
                 <span className="text-cyber-muted">速度:</span>
-                <span className="text-cyber-text font-medium">150/秒</span>
+                <span className="text-cyber-text font-medium">-</span>
               </div>
               <div className="flex items-center gap-2">
                 <Clock className="w-3.5 h-3.5 text-cyber-muted" />
                 <span className="text-cyber-muted">预计剩余:</span>
-                <span className="text-cyber-text font-medium">5.4 分钟</span>
+                <span className="text-cyber-text font-medium">-</span>
               </div>
             </div>
           </div>

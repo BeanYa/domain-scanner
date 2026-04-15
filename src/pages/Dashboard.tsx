@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import {
   Activity,
   CheckCircle2,
@@ -12,69 +13,18 @@ import {
   Pause,
   ExternalLink,
   ChevronRight,
+  Inbox,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-
-const stats = [
-  {
-    label: "运行中",
-    value: "3",
-    icon: Activity,
-    gradient: "from-cyber-green to-cyber-green-dim",
-    textColor: "text-cyber-green",
-    shadowClass: "shadow-neon",
-    change: "+1 较昨日",
-    changeType: "positive" as const,
-    miniBars: [60, 80, 45, 90, 70, 85, 75],
-  },
-  {
-    label: "已完成",
-    value: "24",
-    icon: CheckCircle2,
-    gradient: "from-cyber-blue to-cyber-purple",
-    textColor: "text-cyber-blue",
-    shadowClass: "shadow-neon-blue",
-    change: "+5 本周",
-    changeType: "positive" as const,
-    miniBars: [30, 45, 55, 50, 70, 65, 80],
-  },
-  {
-    label: "可用域名",
-    value: "1,847",
-    icon: Globe,
-    gradient: "from-cyber-orange to-amber-400",
-    textColor: "text-cyber-orange",
-    shadowClass: "shadow-neon-orange",
-    change: "+127 本月",
-    changeType: "positive" as const,
-    miniBars: [20, 35, 40, 55, 48, 62, 70],
-  },
-  {
-    label: "代理在线",
-    value: "8/10",
-    icon: Shield,
-    gradient: "from-cyber-cyan to-teal-400",
-    textColor: "text-cyber-cyan",
-    shadowClass: "shadow-neon-cyan",
-    change: "-1 离线",
-    changeType: "negative" as const,
-    miniBars: [90, 90, 88, 92, 85, 80, 80],
-  },
-];
-
-const recentTasks = [
-  { id: "1", name: "4字母扫描", tlds: [".com", ".net"], status: "running" as const, progress: 67, available: 234, total: 913952, speed: "~2.4k/s" },
-  { id: "2", name: "AI 相关扫描", tlds: [".io"], status: "running" as const, progress: 42, available: 89, total: 500, speed: "~120/s" },
-  { id: "3", name: "3字母扫描", tlds: [".net"], status: "paused" as const, progress: 31, available: 156, total: 17576, speed: "-" },
-  { id: "4", name: "品牌词扫描", tlds: [".com"], status: "completed" as const, progress: 100, available: 412, total: 2000, speed: "-" },
-  { id: "5", name: "短域名扫描", tlds: [".org", ".io", ".dev"], status: "completed" as const, progress: 100, available: 567, total: 2028, speed: "-" },
-];
+import { useGpuStore } from "../store/gpuStore";
+import { useTaskStore } from "../store/taskStore";
+import { useProxyStore } from "../store/proxyStore";
 
 const statusConfig = {
   running:   { label: "运行中", dotClass: "status-dot-running", btnIcon: Pause, btnLabel: "暂停", badgeClass: "badge-green" },
   paused:    { label: "已暂停", dotClass: "status-dot-paused",  btnIcon: Play, btnLabel: "继续", badgeClass: "badge-orange" },
   completed: { label: "已完成", dotClass: "status-dot-completed", btnIcon: ExternalLink, btnLabel: "查看", badgeClass: "badge-blue" },
-  pending:    { label: "等待中", dotClass: "status-dot-idle", btnIcon: Play, btnLabel: "启动", badgeClass: "badge-neutral" },
+  pending:   { label: "等待中", dotClass: "status-dot-idle", btnIcon: Play, btnLabel: "启动", badgeClass: "badge-neutral" },
 };
 
 const quickActions = [
@@ -83,27 +33,76 @@ const quickActions = [
   { icon: Cpu, label: "向量化处理", desc: "GPU 加速语义搜索与智能过滤", to: "/vectorize", color: "group-hover:text-cyber-blue hover:border-cyber-blue/25" },
 ];
 
-/* Mini bar chart component for stat cards */
-function MiniBarChart({ data }: { data: number[] }) {
-  return (
-    <div className="flex items-end gap-[3px] h-7">
-      {data.map((v, i) => (
-        <div
-          key={i}
-          className="flex-1 rounded-sm bg-current opacity-15 transition-all duration-300"
-          style={{ height: `${Math.max(10, v)}%` }}
-        />
-      ))}
-      <div
-        className="flex-1 rounded-sm bg-current opacity-50 transition-all duration-500"
-        style={{ height: `${Math.max(10, data[data.length - 1])}%` }}
-      />
-    </div>
-  );
-}
-
 export default function Dashboard() {
   const navigate = useNavigate();
+  const { status: gpuStatus, fetchStatus: fetchGpuStatus } = useGpuStore();
+  const { tasks, fetchTasks } = useTaskStore();
+  const { proxies, fetchProxies } = useProxyStore();
+
+  useEffect(() => {
+    fetchGpuStatus();
+    fetchTasks();
+    fetchProxies();
+  }, []);
+
+  const runningCount = tasks.filter(t => t.status === "running").length;
+  const completedCount = tasks.filter(t => t.status === "completed").length;
+  const availableCount = tasks.reduce((sum, t) => sum + t.available_count, 0);
+  const activeProxies = proxies.filter(p => p.is_active).length;
+  const totalProxies = proxies.length;
+
+  const stats = [
+    {
+      label: "运行中",
+      value: String(runningCount),
+      icon: Activity,
+      gradient: "from-cyber-green to-cyber-green-dim",
+      textColor: "text-cyber-green",
+      shadowClass: "shadow-neon",
+    },
+    {
+      label: "已完成",
+      value: String(completedCount),
+      icon: CheckCircle2,
+      gradient: "from-cyber-blue to-cyber-purple",
+      textColor: "text-cyber-blue",
+      shadowClass: "shadow-neon-blue",
+    },
+    {
+      label: "可用域名",
+      value: availableCount.toLocaleString(),
+      icon: Globe,
+      gradient: "from-cyber-orange to-amber-400",
+      textColor: "text-cyber-orange",
+      shadowClass: "shadow-neon-orange",
+    },
+    {
+      label: "代理在线",
+      value: totalProxies > 0 ? `${activeProxies}/${totalProxies}` : "0",
+      icon: Shield,
+      gradient: "from-cyber-cyan to-teal-400",
+      textColor: "text-cyber-cyan",
+      shadowClass: "shadow-neon-cyan",
+    },
+  ];
+
+  const recentTasks = tasks.slice(0, 5).map(t => ({
+    id: t.id,
+    name: t.name,
+    tlds: t.tlds,
+    status: t.status as keyof typeof statusConfig,
+    progress: t.total_count > 0 ? Math.round((t.completed_count / t.total_count) * 100) : 0,
+    available: t.available_count,
+    total: t.total_count,
+  }));
+
+  const gpuBackendLabel = gpuStatus?.available
+    ? gpuStatus.backend === "cuda" ? "CUDA"
+    : gpuStatus.backend === "directml" ? "DirectML"
+    : gpuStatus.backend === "cpu" ? "CPU"
+    : gpuStatus.backend
+    : "CPU";
+  const gpuDeviceName = gpuStatus?.device_name || "CPU Only";
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -126,9 +125,7 @@ export default function Dashboard() {
       {/* Stats Grid */}
       <div className="grid grid-cols-4 gap-4">
         {stats.map((stat) => (
-          <div key={stat.label} className={`stat-card group ${stat.shadowClass}`} style={{
-            ['--tw-gradient-from' as string]: undefined,
-          }}>
+          <div key={stat.label} className={`stat-card group ${stat.shadowClass}`}>
             <div className="flex items-start justify-between mb-3">
               <span className="text-xs font-medium text-cyber-muted uppercase tracking-wider">{stat.label}</span>
               <div className={`w-9 h-9 rounded-xl bg-gradient-to-br ${stat.gradient} flex items-center justify-center`}>
@@ -136,18 +133,6 @@ export default function Dashboard() {
               </div>
             </div>
             <p className={`text-3xl font-bold tracking-tight ${stat.textColor}`}>{stat.value}</p>
-
-            {/* Mini bar chart */}
-            <div className={`${stat.textColor} mt-3`}>
-              <MiniBarChart data={stat.miniBars} />
-            </div>
-
-            {/* Change indicator */}
-            <div className={`flex items-center gap-1 mt-2 text-xs font-medium ${
-              stat.changeType === "positive" ? "text-cyber-green" : "text-cyber-orange"
-            }`}>
-              <span>{stat.change}</span>
-            </div>
           </div>
         ))}
       </div>
@@ -172,58 +157,52 @@ export default function Dashboard() {
 
           {/* Task List */}
           <div className="space-y-2.5">
-            {recentTasks.map((task) => {
-              const cfg = statusConfig[task.status];
-              const BtnIcon = cfg.btnIcon;
-              return (
-                <div
-                  key={task.id}
-                  className="task-card group"
-                  onClick={() => navigate(`/tasks/${task.id}`)}
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    {/* Left: Info */}
-                    <div className="flex-1 min-w-0">
-                      {/* Name row + TLDs + Status + Action */}
-                      <div className="flex items-center gap-2 mb-2">
-                        <span className={`dot ${cfg.dotClass} shrink-0`} />
-                        <span className="text-sm font-semibold text-cyber-text truncate">{task.name}</span>
-
-                        {/* TLD badges */}
-                        <div className="flex items-center gap-1 shrink-0">
-                          {task.tlds.slice(0, 3).map((tld) => (
-                            <span key={tld} className="badge-neutral text-[11px]">{tld}</span>
-                          ))}
-                          {task.tlds.length > 3 && (
-                            <span className="badge-blue text-[11px]">+{task.tlds.length - 3}</span>
-                          )}
+            {recentTasks.length === 0 ? (
+              <div className="text-center py-12 text-cyber-muted">
+                <Inbox className="w-10 h-10 mx-auto mb-3 opacity-40" />
+                <p className="text-sm">暂无任务</p>
+                <p className="text-xs text-cyber-muted-dim mt-1">点击「新建扫描」创建第一个扫描任务</p>
+              </div>
+            ) : (
+              recentTasks.map((task) => {
+                const cfg = statusConfig[task.status] || statusConfig.pending;
+                return (
+                  <div
+                    key={task.id}
+                    className="task-card group"
+                    onClick={() => navigate(`/tasks/${task.id}`)}
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className={`dot ${cfg.dotClass} shrink-0`} />
+                          <span className="text-sm font-semibold text-cyber-text truncate">{task.name}</span>
+                          <div className="flex items-center gap-1 shrink-0">
+                            {task.tlds.slice(0, 3).map((tld) => (
+                              <span key={tld} className="badge-neutral text-[11px]">{tld}</span>
+                            ))}
+                            {task.tlds.length > 3 && (
+                              <span className="badge-blue text-[11px]">+{task.tlds.length - 3}</span>
+                            )}
+                          </div>
+                          <span className={`${cfg.badgeClass} text-[11px] ml-auto shrink-0`}>{cfg.label}</span>
                         </div>
-
-                        <span className={`${cfg.badgeClass} text-[11px] ml-auto shrink-0`}>{cfg.label}</span>
-                      </div>
-
-                      {/* Progress bar */}
-                      <div className="flex items-center gap-3">
-                        <div className="flex-1 progress-bar max-w-[240px]">
-                          <div
-                            className="progress-bar-fill"
-                            style={{ width: `${task.progress}%` }}
-                          />
+                        <div className="flex items-center gap-3">
+                          <div className="flex-1 progress-bar max-w-[240px]">
+                            <div className="progress-bar-fill" style={{ width: `${task.progress}%` }} />
+                          </div>
+                          <span className="text-xs font-mono text-cyber-muted w-9 text-right tabular-nums">{task.progress}%</span>
                         </div>
-                        <span className="text-xs font-mono text-cyber-muted w-9 text-right tabular-nums">{task.progress}%</span>
-                        <span className="text-[11px] text-cyber-muted-dim w-14 text-right tabular-nums hidden sm:block">{task.speed}</span>
                       </div>
-                    </div>
-
-                    {/* Right: Available count + Quick action */}
-                    <div className="text-right shrink-0 pl-2 border-l border-cyber-border/20 min-w-[72px]">
-                      <p className="text-lg font-bold text-cyber-green tabular-nums">{task.available.toLocaleString()}</p>
-                      <p className="text-[10px] text-cyber-muted-dim">可用域名</p>
+                      <div className="text-right shrink-0 pl-2 border-l border-cyber-border/20 min-w-[72px]">
+                        <p className="text-lg font-bold text-cyber-green tabular-nums">{task.available.toLocaleString()}</p>
+                        <p className="text-[10px] text-cyber-muted-dim">可用域名</p>
+                      </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })
+            )}
           </div>
         </div>
 
@@ -240,11 +219,11 @@ export default function Dashboard() {
                 <button
                   key={to}
                   onClick={() => navigate(to)}
-                  className={`w-full p-3.5 rounded-xl bg-cyber-bg-elevated/60 border border-cyber-border/25 
+                  className={`w-full p-3.5 rounded-xl bg-cyber-bg-elevated/60 border border-cyber-border/25
                            text-left group transition-all duration-200 hover:bg-cyber-surface/60 ${color}`}
                 >
                   <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-lg bg-cyber-card border border-cyber-border/20 
+                    <div className="w-8 h-8 rounded-lg bg-cyber-card border border-cyber-border/20
                                 flex items-center justify-center shrink-0
                                 group-hover:border-current/20 transition-colors">
                       <Icon className="w-4 h-4 text-cyber-muted group-hover:text-inherit transition-colors" />
@@ -267,11 +246,20 @@ export default function Dashboard() {
               系统状态
             </h2>
 
-            {/* GPU Info */}
             <div className="rounded-xl bg-cyber-bg-elevated/60 p-3.5 space-y-2.5">
               <div className="flex items-center justify-between">
                 <span className="text-xs text-cyber-muted">推理后端</span>
-                <span className="text-xs font-semibold text-cyber-orange px-2 py-0.5 rounded-md bg-cyber-orange/8">CPU</span>
+                <span className={`text-xs font-semibold px-2 py-0.5 rounded-md ${
+                  gpuStatus?.available && gpuStatus.backend !== "cpu"
+                    ? "text-cyber-green bg-cyber-green/8"
+                    : "text-cyber-orange bg-cyber-orange/8"
+                }`}>
+                  {gpuBackendLabel}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-cyber-muted">设备</span>
+                <span className="text-xs font-mono text-cyber-text-secondary">{gpuDeviceName}</span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-xs text-cyber-muted">Embedding 模型</span>
@@ -284,10 +272,17 @@ export default function Dashboard() {
 
               <div className="divider my-1" />
 
-              <div className="flex items-center gap-2 p-2 rounded-lg bg-cyber-green/4 border border-cyber-green/12">
-                <Cpu className="w-3.5 h-3.5 text-cyber-green/70" />
-                <span className="text-[11px] text-cyber-green/80">启用 --features gpu-directml 以使用 AMD GPU 加速</span>
-              </div>
+              {gpuStatus?.available && gpuStatus.backend !== "cpu" ? (
+                <div className="flex items-center gap-2 p-2 rounded-lg bg-cyber-green/4 border border-cyber-green/12">
+                  <Cpu className="w-3.5 h-3.5 text-cyber-green/70" />
+                  <span className="text-[11px] text-cyber-green/80">GPU 加速已启用</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 p-2 rounded-lg bg-cyber-orange/4 border border-cyber-orange/12">
+                  <Cpu className="w-3.5 h-3.5 text-cyber-orange/70" />
+                  <span className="text-[11px] text-cyber-orange/80">CPU 模式运行中，可在设置中配置 GPU</span>
+                </div>
+              )}
             </div>
           </div>
         </div>

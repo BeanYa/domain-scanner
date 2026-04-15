@@ -1,16 +1,7 @@
 import { useState } from "react";
-import { Search, Filter, Brain, Regex, Type, CheckCircle, XCircle, SlidersHorizontal } from "lucide-react";
+import { Search, Filter, Brain, Regex, Type, SlidersHorizontal, Inbox } from "lucide-react";
 
 type FilterMode = "exact" | "fuzzy" | "regex" | "semantic";
-
-const mockItems = [
-  { domain: "techworld.com", matched: true, score: 1.0 },
-  { domain: "codehub.com", matched: true, score: 0.98 },
-  { domain: "devstream.com", matched: true, score: 0.95 },
-  { domain: "aifusion.com", matched: true, score: 0.92 },
-  { domain: "neuralops.com", matched: false, score: 0.45 },
-  { domain: "dataforge.com", matched: false, score: 0.38 },
-];
 
 export default function FilterResults() {
   const [mode, setMode] = useState<FilterMode>("exact");
@@ -107,48 +98,14 @@ export default function FilterResults() {
 
       {/* Results */}
       <div className="glass-panel overflow-hidden">
-        <div className="px-5 py-3 border-b border-cyber-border/30 flex items-center justify-between">
+        <div className="px-5 py-3 border-b border-cyber-border/30">
           <h2 className="text-sm font-semibold text-cyber-text">筛选结果</h2>
-          <div className="flex items-center gap-3 text-xs text-cyber-muted">
-            <span>匹配 4 / 6</span>
-          </div>
         </div>
-        <table className="w-full">
-          <thead>
-            <tr className="text-xs text-cyber-muted border-b border-cyber-border/20">
-              <th className="text-left px-5 py-2 font-medium">域名</th>
-              <th className="text-center px-5 py-2 font-medium">匹配状态</th>
-              {mode === "semantic" && (
-                <th className="text-right px-5 py-2 font-medium">相似度</th>
-              )}
-            </tr>
-          </thead>
-          <tbody>
-            {mockItems.map((item, i) => (
-              <tr key={i} className="border-b border-cyber-border/10 hover:bg-cyber-card/30 transition-colors">
-                <td className="px-5 py-2.5 text-sm font-mono text-cyber-text">{item.domain}</td>
-                <td className="px-5 py-2.5 text-center">
-                  {item.matched ? (
-                    <span className="inline-flex items-center gap-1 text-xs text-cyber-green">
-                      <CheckCircle className="w-3.5 h-3.5" /> 匹配
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 text-xs text-cyber-muted">
-                      <XCircle className="w-3.5 h-3.5" /> 不匹配
-                    </span>
-                  )}
-                </td>
-                {mode === "semantic" && (
-                  <td className="px-5 py-2.5 text-right">
-                    <span className={`text-xs font-mono ${item.matched ? "text-cyber-green" : "text-cyber-muted"}`}>
-                      {item.score.toFixed(2)}
-                    </span>
-                  </td>
-                )}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="text-center py-12 text-cyber-muted">
+          <Inbox className="w-10 h-10 mx-auto mb-3 opacity-40" />
+          <p className="text-sm">暂无筛选结果</p>
+          <p className="text-xs text-cyber-muted-dim mt-1">请先完成扫描任务，再执行筛选操作</p>
+        </div>
       </div>
     </div>
   );

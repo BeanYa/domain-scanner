@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Brain,
   Cpu,
@@ -8,12 +8,20 @@ import {
   TestTube2,
   Monitor,
   Database,
-  Key,
   Plus,
   ExternalLink,
 } from "lucide-react";
+import { useGpuStore } from "../store/gpuStore";
+import { TLD_LIST, TLDS_BY_CATEGORY, TLD_COUNT, type TldCategory } from "../data/tlds";
 
 type SettingsTab = "llm" | "gpu" | "tld" | "general";
+
+const categoryLabels: Record<TldCategory, string> = {
+  gtld: "通用 gTLD",
+  new_gtld: "新 gTLD",
+  cctld: "国家 ccTLD",
+  other: "其他",
+};
 
 export default function Settings() {
   const [activeTab, setActiveTab] = useState<SettingsTab>("llm");
@@ -27,14 +35,12 @@ export default function Settings() {
 
   return (
     <div className="space-y-6 max-w-5xl animate-fade-in">
-      {/* Header */}
       <div>
         <h1 className="text-2xl font-bold neon-text tracking-tight">设置</h1>
         <p className="text-sm text-cyber-muted mt-1">配置 LLM、GPU、TLD 后缀和应用参数</p>
       </div>
 
       <div className="grid grid-cols-[200px_1fr] gap-6">
-        {/* Sidebar Tabs */}
         <div className="space-y-1">
           {tabs.map((tab) => (
             <button
@@ -54,7 +60,6 @@ export default function Settings() {
           ))}
         </div>
 
-        {/* Content */}
         <div>
           {activeTab === "llm" && <LLMSettings />}
           {activeTab === "gpu" && <GPUSettings />}
@@ -67,11 +72,6 @@ export default function Settings() {
 }
 
 function LLMSettings() {
-  const configs = [
-    { id: "glm-4", name: "GLM-4 (智谱)", baseUrl: "https://open.bigmodel.cn/api/paas/v4/", model: "glm-4-flash", isDefault: true, status: "connected" as const },
-    { id: "minimax", name: "MiniMax Hailuo", baseUrl: "https://api.minimax.chat/v1/", model: "abab6.5s-chat", isDefault: false, status: "disconnected" as const },
-  ];
-
   return (
     <div className="space-y-5 animate-fade-in">
       <div className="flex items-center justify-between">
@@ -81,62 +81,57 @@ function LLMSettings() {
         </button>
       </div>
 
-      <div className="space-y-3">
-        {configs.map((config) => (
-          <div key={config.id} className="glass-panel p-5 space-y-3 group">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${
-                  config.status === "connected"
-                    ? "bg-cyber-purple/10 text-cyber-purple"
-                    : "bg-cyber-surface text-cyber-muted-dim"
-                }`}>
-                  <Brain className="w-4.5 h-4.5" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-semibold text-cyber-text">{config.name}</span>
-                    {config.isDefault && <span className="badge-green text-[10px]">默认</span>}
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded-md ${
-                      config.status === "connected" ? "bg-cyber-green/8 text-cyber-green" : "bg-cyber-red/8 text-cyber-red/70"
-                    }`}>
-                      {config.status === "connected" ? "已连接" : "未连接"}
-                    </span>
-                  </div>
-                </div>
-              </div>
-              <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                <button className="cyber-btn-secondary cyber-btn-sm"><TestTube2 className="w-3 h-3" /> 测试</button>
-                <button className="cyber-btn-secondary cyber-btn-sm">编辑</button>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3 text-xs pt-1">
-              <div className="rounded-lg bg-cyber-bg-elevated/60 p-2.5 border border-cyber-border/15">
-                <span className="text-cyber-muted-dim block mb-0.5">Base URL</span>
-                <span className="text-cyber-text-secondary font-mono text-[11px] break-all">{config.baseUrl}</span>
-              </div>
-              <div className="rounded-lg bg-cyber-bg-elevated/60 p-2.5 border border-cyber-border/15">
-                <span className="text-cyber-muted-dim block mb-0.5">Model</span>
-                <span className="font-mono text-cyber-text-secondary">{config.model}</span>
-              </div>
-            </div>
-          </div>
-        ))}
+      <div className="glass-panel p-8 text-center text-cyber-muted">
+        <Brain className="w-10 h-10 mx-auto mb-3 opacity-30" />
+        <p className="text-sm">暂无 LLM 配置</p>
+        <p className="text-xs text-cyber-muted-dim mt-1">点击「添加配置」连接 LLM 服务用于智能域名生成</p>
       </div>
     </div>
   );
 }
 
 function GPUSettings() {
+  const { status: gpuStatus, config: gpuConfig, fetchStatus, updateConfig } = useGpuStore();
+  const [backend, setBackend] = useState(gpuConfig?.backend || "auto");
+  const [deviceId, setDeviceId] = useState(gpuConfig?.device_id ?? 0);
+  const [batchSize, setBatchSize] = useState(gpuConfig?.batch_size ?? 500);
+
+  useEffect(() => {
+    fetchStatus();
+  }, []);
+
+  useEffect(() => {
+    if (gpuConfig) {
+      setBackend(gpuConfig.backend);
+      setDeviceId(gpuConfig.device_id);
+      setBatchSize(gpuConfig.batch_size);
+    }
+  }, [gpuConfig]);
+
+  const handleSave = () => {
+    updateConfig({ backend: backend as any, device_id: deviceId, batch_size: batchSize });
+  };
+
+  const gpuBackendLabel = gpuStatus?.available
+    ? gpuStatus.backend === "cuda" ? "CUDA"
+    : gpuStatus.backend === "directml" ? "DirectML"
+    : gpuStatus.backend === "cpu" ? "CPU"
+    : gpuStatus.backend
+    : "检测中...";
+  const gpuDeviceName = gpuStatus?.device_name || "-";
+
   return (
     <div className="space-y-5 animate-fade-in">
       <h2 className="section-title m-0"><Monitor className="w-4.5 h-4.5 text-cyber-green" /> GPU 加速配置</h2>
 
       <div className="glass-panel p-5 space-y-5">
-        {/* Backend selector */}
         <div>
           <label className="block text-xs font-medium text-cyber-muted mb-1.5 uppercase tracking-wider">推理后端</label>
-          <select className="cyber-input text-sm cursor-pointer">
+          <select
+            value={backend}
+            onChange={(e) => setBackend(e.target.value as any)}
+            className="cyber-input text-sm cursor-pointer"
+          >
             <option value="auto">自动检测（推荐）</option>
             <option value="cuda">CUDA (NVIDIA)</option>
             <option value="directml">DirectML (AMD Windows)</option>
@@ -150,11 +145,11 @@ function GPUSettings() {
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-xs font-medium text-cyber-muted mb-1.5 uppercase tracking-wider">设备 ID</label>
-            <input type="number" defaultValue={0} className="cyber-input w-full text-sm" />
+            <input type="number" value={deviceId} onChange={(e) => setDeviceId(Number(e.target.value))} className="cyber-input w-full text-sm" />
           </div>
           <div>
             <label className="block text-xs font-medium text-cyber-muted mb-1.5 uppercase tracking-wider">批处理大小</label>
-            <input type="number" defaultValue={500} className="cyber-input w-full text-sm" />
+            <input type="number" value={batchSize} onChange={(e) => setBatchSize(Number(e.target.value))} className="cyber-input w-full text-sm" />
           </div>
         </div>
 
@@ -167,19 +162,28 @@ function GPUSettings() {
         </div>
 
         {/* GPU Status Banner */}
-        <div className="flex items-start gap-3 p-4 rounded-xl bg-cyber-orange/[0.03] border border-cyber-orange/18">
-          <Cpu className="w-5 h-5 text-cyber-orange shrink-0 mt-0.5" />
+        <div className={`flex items-start gap-3 p-4 rounded-xl border ${
+          gpuStatus?.available && gpuStatus.backend !== "cpu"
+            ? "bg-cyber-green/[0.03] border-cyber-green/18"
+            : "bg-cyber-orange/[0.03] border-cyber-orange/18"
+        }`}>
+          <Cpu className={`w-5 h-5 shrink-0 mt-0.5 ${gpuStatus?.available && gpuStatus.backend !== "cpu" ? "text-cyber-green" : "text-cyber-orange"}`} />
           <div>
-            <p className="text-sm font-semibold text-cyber-orange">当前：CPU 模式运行中</p>
+            <p className={`text-sm font-semibold ${gpuStatus?.available && gpuStatus.backend !== "cpu" ? "text-cyber-green" : "text-cyber-orange"}`}>
+              {gpuStatus?.available && gpuStatus.backend !== "cpu"
+                ? `GPU 已启用：${gpuBackendLabel}`
+                : "当前：CPU 模式运行中"}
+            </p>
             <p className="text-xs text-cyber-muted-dim mt-1 leading-relaxed">
-              未检测到可用 GPU。如需 GPU 加速，请重新构建时添加 <code className="font-mono text-cyber-orange bg-cyber-orange/8 px-1.5 py-0.5 rounded">--features gpu-directml</code> 参数。
-              你的 AMD 5700XT 可通过 DirectML 获得显著的向量化性能提升。
+              {gpuStatus?.device_name
+                ? `检测到设备：${gpuDeviceName}`
+                : "未检测到可用 GPU。如需 GPU 加速，请安装对应版本的 CUDA/DirectML 驱动。"}
             </p>
           </div>
         </div>
 
         <div className="pt-2">
-          <button className="cyber-btn-primary cyber-btn-sm"><Save className="w-3.5 h-3.5" /> 保存 GPU 配置</button>
+          <button onClick={handleSave} className="cyber-btn-primary cyber-btn-sm"><Save className="w-3.5 h-3.5" /> 保存 GPU 配置</button>
         </div>
       </div>
     </div>
@@ -187,15 +191,6 @@ function GPUSettings() {
 }
 
 function TLDSettings() {
-  const tlds = [
-    { tld: ".com", popular: true }, { tld: ".net", popular: true },
-    { tld: ".org", popular: true }, { tld: ".io", popular: true },
-    { tld: ".ai", popular: false }, { tld: ".dev", popular: true },
-    { tld: ".co", popular: false }, { tld: ".app", popular: false },
-    { tld: ".info", popular: false }, { tld: ".biz", popular: false },
-    { tld: ".xyz", popular: true }, { tld: ".me", popular: false },
-  ];
-
   return (
     <div className="space-y-5 animate-fade-in">
       <div className="flex items-center justify-between">
@@ -205,24 +200,30 @@ function TLDSettings() {
 
       <div className="glass-panel p-5 space-y-4">
         <p className="text-sm text-cyber-muted">
-          当前内置 <strong className="text-cyber-text">{tlds.length}</strong> 个 TLD 后缀。点击标签可编辑或禁用。
+          当前内置 <strong className="text-cyber-text">{TLD_COUNT}</strong> 个 TLD 后缀，涵盖通用、新顶级域名、国家代码等分类。
         </p>
 
-        <div className="flex flex-wrap gap-2">
-          {tlds.map(({ tld, popular }) => (
-            <span
-              key={tld}
-              className="group relative inline-flex items-center gap-1.5 px-3 py-2 rounded-xl 
-                       bg-cyber-surface border border-cyber-border/30 text-sm text-cyber-text
-                       hover:border-cyber-green/25 hover:bg-cyber-green/[0.04]
-                       transition-all duration-200 cursor-pointer"
-            >
-              <Globe className="w-3.5 h-3.5 text-cyber-muted-dim group-hover:text-cyber-green transition-colors" />
-              {tld}
-              {popular && <span className="text-[9px] px-1 py-px rounded bg-cyber-orange/10 text-cyber-orange">HOT</span>}
-            </span>
-          ))}
-        </div>
+        {(Object.entries(TLDS_BY_CATEGORY) as [TldCategory, typeof TLD_LIST][]).map(([cat, tlds]) => (
+          <div key={cat}>
+            <p className="text-xs font-semibold text-cyber-muted uppercase tracking-wider mb-2">
+              {categoryLabels[cat]} ({tlds.length})
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {tlds.map(({ tld, popular }) => (
+                <span
+                  key={tld}
+                  className="group relative inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg
+                           bg-cyber-surface border border-cyber-border/30 text-xs text-cyber-text
+                           hover:border-cyber-green/25 hover:bg-cyber-green/[0.04]
+                           transition-all duration-200 cursor-pointer"
+                >
+                  {tld}
+                  {popular && <span className="text-[8px] px-0.5 rounded bg-cyber-orange/10 text-cyber-orange">HOT</span>}
+                </span>
+              ))}
+            </div>
+          </div>
+        ))}
 
         <div className="divider my-2" />
 

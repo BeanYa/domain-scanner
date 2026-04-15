@@ -1,25 +1,14 @@
-import { useState } from "react";
-import { Plus, Trash2, TestTube2, Wifi, WifiOff, Upload, Shield } from "lucide-react";
-
-interface Proxy {
-  id: number;
-  name: string;
-  url: string;
-  type: "http" | "https" | "socks5";
-  active: boolean;
-}
-
-const mockProxies: Proxy[] = [
-  { id: 1, name: "US Proxy 1", url: "http://us1.proxy.io:8080", type: "http", active: true },
-  { id: 2, name: "US Proxy 2", url: "http://us2.proxy.io:8080", type: "http", active: true },
-  { id: 3, name: "EU Proxy", url: "socks5://eu.proxy.io:1080", type: "socks5", active: false },
-  { id: 4, name: "Asia Proxy", url: "https://asia.proxy.io:443", type: "https", active: true },
-  { id: 5, name: "Backup Proxy", url: "http://backup.proxy.io:8080", type: "http", active: true },
-];
+import { useState, useEffect } from "react";
+import { Plus, Trash2, TestTube2, Wifi, WifiOff, Upload, Shield, Inbox } from "lucide-react";
+import { useProxyStore } from "../store/proxyStore";
 
 export default function ProxyManager() {
-  const [proxies, setProxies] = useState(mockProxies);
+  const { proxies, fetchProxies, deleteProxy } = useProxyStore();
   const [showAdd, setShowAdd] = useState(false);
+
+  useEffect(() => {
+    fetchProxies();
+  }, []);
 
   const typeColors = {
     http: "text-cyber-green bg-cyber-green/10",
@@ -55,7 +44,7 @@ export default function ProxyManager() {
             <Wifi className="w-5 h-5 text-cyber-green" />
           </div>
           <div>
-            <p className="text-lg font-bold text-cyber-green">{proxies.filter((p) => p.active).length}</p>
+            <p className="text-lg font-bold text-cyber-green">{proxies.filter((p) => p.is_active).length}</p>
             <p className="text-xs text-cyber-muted">在线代理</p>
           </div>
         </div>
@@ -64,7 +53,7 @@ export default function ProxyManager() {
             <WifiOff className="w-5 h-5 text-cyber-red" />
           </div>
           <div>
-            <p className="text-lg font-bold text-cyber-red">{proxies.filter((p) => !p.active).length}</p>
+            <p className="text-lg font-bold text-cyber-red">{proxies.filter((p) => !p.is_active).length}</p>
             <p className="text-xs text-cyber-muted">离线代理</p>
           </div>
         </div>
@@ -109,53 +98,65 @@ export default function ProxyManager() {
       )}
 
       {/* Proxy List */}
-      <div className="glass-panel overflow-hidden">
-        <table className="w-full">
-          <thead>
-            <tr className="text-xs text-cyber-muted border-b border-cyber-border/20">
-              <th className="text-left px-5 py-2 font-medium">名称</th>
-              <th className="text-left px-5 py-2 font-medium">URL</th>
-              <th className="text-center px-5 py-2 font-medium">类型</th>
-              <th className="text-center px-5 py-2 font-medium">状态</th>
-              <th className="text-right px-5 py-2 font-medium">操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {proxies.map((proxy) => (
-              <tr key={proxy.id} className="border-b border-cyber-border/10 hover:bg-cyber-card/30 transition-colors">
-                <td className="px-5 py-3 text-sm text-cyber-text font-medium">{proxy.name}</td>
-                <td className="px-5 py-3 text-sm font-mono text-cyber-muted">{proxy.url}</td>
-                <td className="px-5 py-3 text-center">
-                  <span className={`text-xs px-2 py-0.5 rounded ${typeColors[proxy.type]}`}>
-                    {proxy.type.toUpperCase()}
-                  </span>
-                </td>
-                <td className="px-5 py-3 text-center">
-                  {proxy.active ? (
-                    <span className="inline-flex items-center gap-1 text-xs text-cyber-green">
-                      <div className="w-1.5 h-1.5 rounded-full bg-cyber-green" /> 在线
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 text-xs text-cyber-red">
-                      <div className="w-1.5 h-1.5 rounded-full bg-cyber-red" /> 离线
-                    </span>
-                  )}
-                </td>
-                <td className="px-5 py-3 text-right">
-                  <div className="flex items-center justify-end gap-1">
-                    <button className="p-1.5 rounded hover:bg-cyber-green/10 text-cyber-muted hover:text-cyber-green" title="测试">
-                      <TestTube2 className="w-3.5 h-3.5" />
-                    </button>
-                    <button className="p-1.5 rounded hover:bg-cyber-red/10 text-cyber-muted hover:text-cyber-red" title="删除">
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </td>
+      {proxies.length === 0 ? (
+        <div className="glass-panel p-12 text-center text-cyber-muted">
+          <Inbox className="w-10 h-10 mx-auto mb-3 opacity-40" />
+          <p className="text-sm">暂无代理</p>
+          <p className="text-xs text-cyber-muted-dim mt-1">点击「添加代理」配置代理服务器</p>
+        </div>
+      ) : (
+        <div className="glass-panel overflow-hidden">
+          <table className="w-full">
+            <thead>
+              <tr className="text-xs text-cyber-muted border-b border-cyber-border/20">
+                <th className="text-left px-5 py-2 font-medium">名称</th>
+                <th className="text-left px-5 py-2 font-medium">URL</th>
+                <th className="text-center px-5 py-2 font-medium">类型</th>
+                <th className="text-center px-5 py-2 font-medium">状态</th>
+                <th className="text-right px-5 py-2 font-medium">操作</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {proxies.map((proxy) => (
+                <tr key={proxy.id} className="border-b border-cyber-border/10 hover:bg-cyber-card/30 transition-colors">
+                  <td className="px-5 py-3 text-sm text-cyber-text font-medium">{proxy.name || "-"}</td>
+                  <td className="px-5 py-3 text-sm font-mono text-cyber-muted">{proxy.url}</td>
+                  <td className="px-5 py-3 text-center">
+                    <span className={`text-xs px-2 py-0.5 rounded ${typeColors[proxy.proxy_type]}`}>
+                      {proxy.proxy_type.toUpperCase()}
+                    </span>
+                  </td>
+                  <td className="px-5 py-3 text-center">
+                    {proxy.is_active ? (
+                      <span className="inline-flex items-center gap-1 text-xs text-cyber-green">
+                        <div className="w-1.5 h-1.5 rounded-full bg-cyber-green" /> 在线
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-xs text-cyber-red">
+                        <div className="w-1.5 h-1.5 rounded-full bg-cyber-red" /> 离线
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-5 py-3 text-right">
+                    <div className="flex items-center justify-end gap-1">
+                      <button className="p-1.5 rounded hover:bg-cyber-green/10 text-cyber-muted hover:text-cyber-green" title="测试">
+                        <TestTube2 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        className="p-1.5 rounded hover:bg-cyber-red/10 text-cyber-muted hover:text-cyber-red"
+                        title="删除"
+                        onClick={() => deleteProxy(proxy.id)}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

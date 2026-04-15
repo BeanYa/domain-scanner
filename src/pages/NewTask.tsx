@@ -1,20 +1,18 @@
 import { useState, Fragment } from "react";
-import { Zap, Regex, Type, Brain, List, ChevronRight, CheckCircle, AlertTriangle, Sparkles } from "lucide-react";
+import { Zap, Regex, Type, Brain, List, ChevronRight, CheckCircle, AlertTriangle, Sparkles, Globe, Search } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { TLD_LIST, POPULAR_TLDS, TLDS_BY_CATEGORY, type TldCategory } from "../data/tlds";
 
 type ScanTab = "regex" | "llm" | "manual";
 type Step = 1 | 2 | 3;
+type TldView = "popular" | "category";
 
-const tldOptions = [
-  { value: ".com", label: ".com", count: 456976 },
-  { value: ".net", label: ".net", count: 456976 },
-  { value: ".org", label: ".org", count: 456976 },
-  { value: ".io", label: ".io", count: 0 },
-  { value: ".ai", label: ".ai", count: 0 },
-  { value: ".dev", label: ".dev", count: 0 },
-  { value: ".co", label: ".co", count: 0 },
-  { value: ".app", label: ".app", count: 0 },
-];
+const categoryLabels: Record<TldCategory, string> = {
+  gtld: "通用 gTLD",
+  new_gtld: "新 gTLD",
+  cctld: "国家 ccTLD",
+  other: "其他",
+};
 
 export default function NewTask() {
   const [activeTab, setActiveTab] = useState<ScanTab>("regex");
@@ -24,6 +22,8 @@ export default function NewTask() {
   const [selectedTlds, setSelectedTlds] = useState<string[]>([".com"]);
   const [taskName, setTaskName] = useState("");
   const [created, setCreated] = useState(false);
+  const [tldView, setTldView] = useState<TldView>("popular");
+  const [tldSearch, setTldSearch] = useState("");
   const navigate = useNavigate();
 
   const tabs: { key: ScanTab; label: string; icon: typeof Regex; desc: string }[] = [
@@ -36,6 +36,21 @@ export default function NewTask() {
     setSelectedTlds((prev) =>
       prev.includes(tld) ? prev.filter((t) => t !== tld) : [...prev, tld]
     );
+  };
+
+  const selectAllVisible = (tlds: string[]) => {
+    setSelectedTlds((prev) => {
+      const set = new Set(prev);
+      for (const t of tlds) set.add(t);
+      return [...set];
+    });
+  };
+
+  const deselectAllVisible = (tlds: string[]) => {
+    setSelectedTlds((prev) => {
+      const set = new Set(tlds);
+      return prev.filter((t) => !set.has(t));
+    });
   };
 
   const estimateCountPerTld = () => {
@@ -55,6 +70,11 @@ export default function NewTask() {
     setCreated(true);
     setTimeout(() => navigate("/tasks"), 1500);
   };
+
+  // Filter TLDs by search
+  const filteredTlds = tldSearch
+    ? TLD_LIST.filter((t) => t.tld.includes(tldSearch.toLowerCase()))
+    : null;
 
   // Success state
   if (created) {
@@ -76,6 +96,14 @@ export default function NewTask() {
   }
 
   const totalEstimate = estimateCountPerTld() * selectedTlds.length;
+
+  // Get visible TLD list based on view mode and search
+  const getVisibleTlds = (): string[] => {
+    if (filteredTlds) return filteredTlds.map((t) => t.tld);
+    if (tldView === "popular") return POPULAR_TLDS.map((t) => t.tld);
+    return TLD_LIST.map((t) => t.tld);
+  };
+  const visibleTlds = getVisibleTlds();
 
   return (
     <div className="space-y-6 max-w-4xl animate-fade-in">
@@ -124,7 +152,6 @@ export default function NewTask() {
       <section className="glass-panel p-5 space-y-4">
         <label className="block text-sm font-semibold text-cyber-text">扫描模式</label>
 
-        {/* Tab Switcher */}
         <div className="grid grid-cols-3 gap-2 p-1 bg-cyber-bg-elevated rounded-xl border border-cyber-border/30">
           {tabs.map((tab) => (
             <button
@@ -145,7 +172,6 @@ export default function NewTask() {
           ))}
         </div>
 
-        {/* Tab Content */}
         <div className="animate-fade-in min-h-[100px]">
           {activeTab === "regex" && (
             <div className="space-y-3">
@@ -202,48 +228,106 @@ export default function NewTask() {
 
       {/* TLD Selector Card */}
       <section className="glass-panel p-5 space-y-4">
-        <label className="flex items-center justify-between">
-          <span className="flex items-center gap-2 text-sm font-semibold text-cyber-text">
+        <div className="flex items-center justify-between">
+          <label className="flex items-center gap-2 text-sm font-semibold text-cyber-text">
             <Globe className="w-4 h-4 text-cyber-cyan-bright" /> 选择 TLD 后缀
-          </span>
-          <button
-            onClick={() => setSelectedTlds(selectedTlds.length === tldOptions.length ? [] : tldOptions.map((t) => t.value))}
-            className="text-[11px] text-cyber-muted hover:text-cyber-cyan transition-colors"
-          >
-            {selectedTlds.length === tldOptions.length ? "取消全选" : "全选"}
-          </button>
-        </label>
-
-        <div className="grid grid-cols-4 gap-2">
-          {tldOptions.map((tld) => {
-            const isSelected = selectedTlds.includes(tld.value);
-            return (
-              <button
-                key={tld.value}
-                onClick={() => toggleTld(tld.value)}
-                className={`
-                  relative p-3.5 rounded-xl border text-sm font-semibold transition-all duration-200 group
-                  ${isSelected
-                    ? "bg-cyber-green/[0.08] border-cyber-green/35 text-cyber-green shadow-neon"
-                    : "bg-cyber-surface border-cyber-border/30 text-cyber-muted hover:border-cyber-border-light hover:text-cyber-text-secondary"
-                  }
-                `}
-              >
-                <span className="text-base">{tld.label}</span>
-                {tld.count > 0 && activeTab === "regex" && (
-                  <p className={`text-[10px] mt-1 font-mono ${isSelected ? "text-cyber-green/70" : "text-cyber-muted-dim"}`}>
-                    {(tld.count / 1000).toFixed(0)}k
-                  </p>
-                )}
-                {isSelected && (
-                  <span className="absolute top-1.5 right-1.5 w-4 h-4 rounded-full bg-cyber-green/20 flex items-center justify-center">
-                    <CheckCircle className="w-3 h-3 text-cyber-green" />
-                  </span>
-                )}
-              </button>
-            );
-          })}
+            <span className="text-xs text-cyber-muted-dim font-normal">({TLD_LIST.length} 个可选)</span>
+          </label>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                if (selectedTlds.length >= visibleTlds.length) deselectAllVisible(visibleTlds);
+                else selectAllVisible(visibleTlds);
+              }}
+              className="text-[11px] text-cyber-muted hover:text-cyber-cyan transition-colors"
+            >
+              {visibleTlds.every((t) => selectedTlds.includes(t)) ? "取消全选" : "全选当前"}
+            </button>
+          </div>
         </div>
+
+        {/* Search + View Toggle */}
+        <div className="flex items-center gap-3">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-cyber-muted-dim pointer-events-none" />
+            <input
+              type="text"
+              placeholder="搜索 TLD..."
+              value={tldSearch}
+              onChange={(e) => setTldSearch(e.target.value)}
+              className="cyber-input pl-9 text-sm"
+            />
+          </div>
+          {!tldSearch && (
+            <div className="flex bg-cyber-surface rounded-lg p-0.5 text-xs border border-cyber-border/30">
+              <button
+                onClick={() => setTldView("popular")}
+                className={`px-3 py-1.5 rounded-md transition-all ${tldView === "popular" ? "bg-cyber-green/15 text-cyber-green" : "text-cyber-muted-dim hover:text-cyber-text"}`}
+              >
+                热门
+              </button>
+              <button
+                onClick={() => setTldView("category")}
+                className={`px-3 py-1.5 rounded-md transition-all ${tldView === "category" ? "bg-cyber-green/15 text-cyber-green" : "text-cyber-muted-dim hover:text-cyber-text"}`}
+              >
+                按分类
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Selected count */}
+        {selectedTlds.length > 0 && (
+          <div className="flex items-center gap-2 text-xs text-cyber-green">
+            <CheckCircle className="w-3.5 h-3.5" />
+            已选择 <strong>{selectedTlds.length}</strong> 个 TLD
+          </div>
+        )}
+
+        {/* TLD Grid */}
+        {tldSearch ? (
+          /* Search results */
+          <div className="grid grid-cols-6 gap-1.5">
+            {(filteredTlds || []).map((t) => (
+              <TldButton key={t.tld} tld={t.tld} selected={selectedTlds.includes(t.tld)} onClick={() => toggleTld(t.tld)} />
+            ))}
+            {(filteredTlds || []).length === 0 && (
+              <p className="col-span-full text-center text-sm text-cyber-muted py-4">未找到匹配的 TLD</p>
+            )}
+          </div>
+        ) : tldView === "popular" ? (
+          /* Popular TLDs grid */
+          <div className="grid grid-cols-6 gap-1.5">
+            {POPULAR_TLDS.map((t) => (
+              <TldButton key={t.tld} tld={t.tld} selected={selectedTlds.includes(t.tld)} onClick={() => toggleTld(t.tld)} highlight />
+            ))}
+          </div>
+        ) : (
+          /* Category view */
+          <div className="space-y-4">
+            {(Object.entries(TLDS_BY_CATEGORY) as [TldCategory, typeof TLD_LIST][]).map(([cat, tlds]) => (
+              <div key={cat}>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-semibold text-cyber-muted uppercase tracking-wider">{categoryLabels[cat]} ({tlds.length})</span>
+                  <button
+                    onClick={() => {
+                      if (tlds.every((t) => selectedTlds.includes(t.tld))) deselectAllVisible(tlds.map((t) => t.tld));
+                      else selectAllVisible(tlds.map((t) => t.tld));
+                    }}
+                    className="text-[10px] text-cyber-muted-dim hover:text-cyber-cyan"
+                  >
+                    {tlds.every((t) => selectedTlds.includes(t.tld)) ? "取消" : "全选"}
+                  </button>
+                </div>
+                <div className="grid grid-cols-8 gap-1">
+                  {tlds.map((t) => (
+                    <TldButton key={t.tld} tld={t.tld} selected={selectedTlds.includes(t.tld)} onClick={() => toggleTld(t.tld)} compact />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Cartesian product info */}
         {selectedTlds.length > 1 && totalEstimate > 0 && (
@@ -289,12 +373,29 @@ export default function NewTask() {
   );
 }
 
-/* Quick import for Globe icon used inline */
-function Globe({ className }: { className?: string }) {
+function TldButton({ tld, selected, onClick, highlight, compact }: {
+  tld: string; selected: boolean; onClick: () => void; highlight?: boolean; compact?: boolean;
+}) {
   return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/>
-      <path d="M2 12h20"/><path d="M12 2c2.5 2.8 4 6.4 4 10s-1.5 7.2-4 10c-2.5-2.8-4-6.4-4-10s1.5-7.2 4-10z"/>
-    </svg>
+    <button
+      onClick={onClick}
+      className={`
+        relative rounded-lg border text-center transition-all duration-150
+        ${compact ? "px-2 py-1.5 text-xs" : "px-3 py-2.5 text-sm font-semibold"}
+        ${selected
+          ? "bg-cyber-green/[0.08] border-cyber-green/35 text-cyber-green shadow-neon"
+          : highlight
+            ? "bg-cyber-surface border-cyber-border/30 text-cyber-text-secondary hover:border-cyber-border-light"
+            : "bg-cyber-surface/50 border-cyber-border/20 text-cyber-muted hover:border-cyber-border-light hover:text-cyber-text-secondary"
+        }
+      `}
+    >
+      {tld}
+      {selected && (
+        <span className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-cyber-green flex items-center justify-center">
+          <CheckCircle className="w-2.5 h-2.5 text-white" />
+        </span>
+      )}
+    </button>
   );
 }
