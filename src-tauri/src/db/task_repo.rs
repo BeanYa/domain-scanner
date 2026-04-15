@@ -72,6 +72,14 @@ impl<'a> TaskRepo<'a> {
         Ok(())
     }
 
+    pub fn update_total_count(&self, id: &str, total_count: i64) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE tasks SET total_count = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+            rusqlite::params![total_count, id],
+        )?;
+        Ok(())
+    }
+
     pub fn reset_for_rerun(&self, id: &str) -> Result<(), rusqlite::Error> {
         self.conn.execute(
             "UPDATE tasks

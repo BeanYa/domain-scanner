@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   ArrowLeft,
   Play,
@@ -16,7 +16,7 @@ import {
 import { useNavigate, useParams } from "react-router-dom";
 import { useTaskStore } from "../store/taskStore";
 import { invokeCommand, listenEvent } from "../services/tauri";
-import type { LogEntry, ScanItem, TaskRun } from "../types";
+import type { LogEntry, PaginatedResult, ScanItem, TaskRun } from "../types";
 
 const logColors: Record<string, string> = {
   info: "text-cyber-green",
@@ -34,6 +34,7 @@ const resultStatusConfig: Record<ScanItem["status"], { label: string; className:
 
 interface ScanProgress {
   task_id: string;
+  run_id: string;
   completed_count: number;
   total_count: number;
   available_count: number;
@@ -52,12 +53,16 @@ export default function TaskDetail() {
   const [runsLoading, setRunsLoading] = useState(false);
   const [runsError, setRunsError] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [resultPage, setResultPage] = useState(1);
+  const [resultTotal, setResultTotal] = useState(0);
   const [results, setResults] = useState<ScanItem[]>([]);
   const [resultsLoading, setResultsLoading] = useState(false);
   const [resultsError, setResultsError] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [logsLoading, setLogsLoading] = useState(false);
   const [logsError, setLogsError] = useState<string | null>(null);
+  const [liveProgress, setLiveProgress] = useState<ScanProgress | null>(null);
+  const resultRefreshTimerRef = useRef<number | null>(null);
   const { tasks, fetchTasks, startTask, pauseTask, rerunTask, deleteTask } = useTaskStore();
 
   const fetchRuns = useCallback(async () => {
@@ -84,6 +89,7 @@ export default function TaskDetail() {
   const fetchResults = useCallback(async () => {
     if (!id || !selectedRunId) {
       setResults([]);
+      setResultTotal(0);
       return;
     }
     setResultsLoading(true);
@@ -93,17 +99,19 @@ export default function TaskDetail() {
         request: {
           task_id: id,
           run_id: selectedRunId,
-          limit: 200,
-          offset: 0,
+          limit: 10,
+          offset: (resultPage - 1) * 10,
         },
       });
-      setResults(JSON.parse(result) as ScanItem[]);
+      const payload = JSON.parse(result) as PaginatedResult<ScanItem>;
+      setResults(payload.items);
+      setResultTotal(payload.total);
     } catch (e) {
       setResultsError(String(e));
     } finally {
       setResultsLoading(false);
     }
-  }, [id, selectedRunId]);
+  }, [id, selectedRunId, resultPage]);
 
   const fetchLogs = useCallback(async () => {
     if (!id || !selectedRunId) {
@@ -139,6 +147,11 @@ export default function TaskDetail() {
   }, [fetchRuns]);
 
   useEffect(() => {
+    setResultPage(1);
+    setLiveProgress(null);
+  }, [selectedRunId]);
+
+  useEffect(() => {
     fetchResults();
   }, [fetchResults]);
 
@@ -149,11 +162,28 @@ export default function TaskDetail() {
   // Listen for scan progress events
   useEffect(() => {
     const unlisten = listenEvent<ScanProgress>("scan-progress", (progress) => {
-      if (progress.task_id === id) {
-        fetchTasks();
-        fetchRuns();
-        fetchResults();
-        fetchLogs();
+      if (progress.task_id !== id) return;
+      setLiveProgress(progress);
+      setRuns((current) =>
+        current.map((run) =>
+          run.id === progress.run_id
+            ? {
+                ...run,
+                completed_count: progress.completed_count,
+                total_count: progress.total_count,
+                available_count: progress.available_count,
+                error_count: progress.error_count,
+              }
+            : run
+        )
+      );
+      if (progress.run_id === selectedRunId && resultPage === 1) {
+        if (resultRefreshTimerRef.current) {
+          window.clearTimeout(resultRefreshTimerRef.current);
+        }
+        resultRefreshTimerRef.current = window.setTimeout(() => {
+          fetchResults();
+        }, 250);
       }
     });
     const unlistenComplete = listenEvent<ScanProgress>("scan-complete", (progress) => {
@@ -164,8 +194,14 @@ export default function TaskDetail() {
         fetchLogs();
       }
     });
-    return () => { unlisten.then(fn => fn()); unlistenComplete.then(fn => fn()); };
-  }, [id, fetchTasks, fetchRuns, fetchResults, fetchLogs]);
+    return () => {
+      unlisten.then(fn => fn());
+      unlistenComplete.then(fn => fn());
+      if (resultRefreshTimerRef.current) {
+        window.clearTimeout(resultRefreshTimerRef.current);
+      }
+    };
+  }, [id, selectedRunId, resultPage, fetchTasks, fetchRuns, fetchResults, fetchLogs]);
 
   useEffect(() => {
     const unlisten = listenEvent<LogEntry>("task-log-created", (log) => {
@@ -184,13 +220,12 @@ export default function TaskDetail() {
     const task = tasks.find((t) => t.id === id);
     if (!task || task.status !== "running") return;
     const interval = setInterval(() => {
-      fetchTasks();
       fetchRuns();
       fetchResults();
       fetchLogs();
-    }, 3000);
+    }, 1500);
     return () => clearInterval(interval);
-  }, [tasks, id, fetchTasks, fetchRuns, fetchResults, fetchLogs]);
+  }, [tasks, id, fetchRuns, fetchResults, fetchLogs]);
 
   const task = tasks.find((t) => t.id === id);
   const selectedRun = useMemo(
@@ -286,13 +321,17 @@ export default function TaskDetail() {
     );
   }
 
-  const summary = selectedRun ?? {
+  const summary =
+    liveProgress && liveProgress.run_id === selectedRunId
+      ? liveProgress
+      : selectedRun ?? {
     total_count: task.total_count,
     completed_count: task.completed_count,
     available_count: task.available_count,
     error_count: task.error_count,
   };
   const progress = summary.total_count > 0 ? Math.round((summary.completed_count / summary.total_count) * 100) : 0;
+  const totalPages = Math.max(1, Math.ceil(resultTotal / 10));
 
   return (
     <div className="space-y-6 animate-fade-in max-w-5xl">
@@ -447,7 +486,7 @@ export default function TaskDetail() {
             <Table className="w-4 h-4 text-cyber-green" /> 扫描结果
           </h2>
           <div className="text-xs text-cyber-muted-dim">
-            已加载 {results.length} 条
+            第 {resultPage}/{totalPages} 页，共 {resultTotal} 条
           </div>
         </div>
         {resultsError ? (
@@ -505,6 +544,28 @@ export default function TaskDetail() {
                 })}
               </tbody>
             </table>
+          </div>
+        )}
+        {resultTotal > 0 && (
+          <div className="px-5 py-3 border-t border-cyber-border/20 flex items-center justify-between text-xs text-cyber-muted-dim">
+            <span>每页 10 条，按最新完成结果排序</span>
+            <div className="flex items-center gap-2">
+              <button
+                className="cyber-btn-secondary cyber-btn-sm"
+                disabled={resultPage <= 1}
+                onClick={() => setResultPage((page) => Math.max(1, page - 1))}
+              >
+                上一页
+              </button>
+              <span className="font-mono">{resultPage} / {totalPages}</span>
+              <button
+                className="cyber-btn-secondary cyber-btn-sm"
+                disabled={resultPage >= totalPages}
+                onClick={() => setResultPage((page) => Math.min(totalPages, page + 1))}
+              >
+                下一页
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -573,7 +634,7 @@ export default function TaskDetail() {
 
       {availableResults.length > 0 && (
         <div className="text-xs text-cyber-muted-dim px-1">
-          当前已发现 {availableResults.length} 个可用域名，结果表默认展示最近加载到的 200 条记录。
+          当前页展示最近完成的 10 条结果；该运行累计已确认 {summary.available_count} 个可用域名。
         </div>
       )}
     </div>

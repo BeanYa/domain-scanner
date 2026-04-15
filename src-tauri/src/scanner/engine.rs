@@ -4,8 +4,11 @@ use crate::db::task_run_repo::TaskRunRepo;
 use crate::models::scan_item::{ScanItem, ScanItemStatus};
 use crate::models::task::TaskStatus;
 use crate::scanner::domain_checker::{CheckConfig, DomainChecker};
-use crate::scanner::list_generator::ListGenerator;
+use crate::scanner::list_generator::{DomainCandidate, ListGenerator};
+use futures::future::BoxFuture;
+use futures::stream::{FuturesUnordered, StreamExt};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
 /// Scan engine configuration
@@ -32,6 +35,7 @@ impl Default for EngineConfig {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ScanProgress {
     pub task_id: String,
+    pub run_id: String,
     pub completed_count: i64,
     pub total_count: i64,
     pub available_count: i64,
@@ -86,17 +90,22 @@ impl ScanEngine {
                 .map_err(|e| format!("Failed to update status: {}", e))?;
         }
 
-        // Create generator starting from checkpoint
         let mut generator = ListGenerator::new(task.scan_mode.clone(), task.tlds.clone())
-            .with_batch_size(self.config.batch_write_size.max(1))
+            .with_batch_size(1)
             .with_start_index(task.completed_index);
         let total_count = task.total_count.max(generator.total_count());
 
         let mut completed_count = task.completed_count;
         let mut available_count = task.available_count;
         let mut error_count = task.error_count;
+        let mut pending_items = Vec::with_capacity(self.config.batch_write_size.max(1));
+        let mut last_persist_at =
+            Instant::now() - Duration::from_millis(self.config.progress_report_interval_ms);
+        let mut last_progress_emit =
+            Instant::now() - Duration::from_millis(self.config.progress_report_interval_ms);
         let initial_progress = self.make_progress(
             task_id,
+            run_id,
             completed_count,
             total_count,
             available_count,
@@ -104,8 +113,10 @@ impl ScanEngine {
         );
         let _ = app.emit("scan-progress", &initial_progress);
 
-        while generator.has_more() {
-            // Check for cancellation
+        let mut inflight = FuturesUnordered::new();
+        self.fill_inflight(&mut inflight, &mut generator);
+
+        while let Some((candidate, result)) = inflight.next().await {
             if cancel_token.is_cancelled() {
                 self.persist_progress_locked(
                     &conn,
@@ -115,6 +126,7 @@ impl ScanEngine {
                     generator.current_index(),
                     available_count,
                     error_count,
+                    &mut pending_items,
                 );
                 {
                     let c = conn.lock().map_err(|e| e.to_string())?;
@@ -128,6 +140,7 @@ impl ScanEngine {
                 }
                 return Ok(self.make_progress(
                     task_id,
+                    run_id,
                     completed_count,
                     total_count,
                     available_count,
@@ -135,91 +148,84 @@ impl ScanEngine {
                 ));
             }
 
-            // Get next batch
-            let batch = generator.next_batch();
-            if batch.is_empty() {
-                break;
+            completed_count += 1;
+            match result.status {
+                ScanItemStatus::Available => available_count += 1,
+                ScanItemStatus::Error => error_count += 1,
+                _ => {}
             }
 
-            // Check domains concurrently
-            let domains: Vec<String> = batch.iter().map(|c| c.domain.clone()).collect();
-            let results = self
-                .checker
-                .check_domains(&domains, self.config.max_concurrency)
-                .await;
+            let item = ScanItem {
+                id: 0,
+                task_id: task_id.to_string(),
+                run_id: run_id.to_string(),
+                domain: result.domain,
+                tld: candidate.tld,
+                item_index: candidate.index,
+                status: result.status,
+                is_available: result.is_available,
+                query_method: result.query_method,
+                response_time_ms: result.response_time_ms,
+                error_message: result.error_message,
+                checked_at: Some(chrono::Utc::now().to_rfc3339()),
+            };
 
-            // Process results
-            let mut scan_items = Vec::new();
-            for (candidate, result) in batch.iter().zip(results.iter()) {
-                completed_count += 1;
+            pending_items.push(item);
 
-                match result.status {
-                    ScanItemStatus::Available => available_count += 1,
-                    ScanItemStatus::Error => error_count += 1,
-                    _ => {}
-                }
-                if result.error_message.is_some() && !matches!(result.status, ScanItemStatus::Error)
-                {
-                    error_count += 1;
-                }
-
-                scan_items.push(ScanItem {
-                    id: 0,
-                    task_id: task_id.to_string(),
-                    run_id: run_id.to_string(),
-                    domain: result.domain.clone(),
-                    tld: candidate.tld.clone(),
-                    item_index: candidate.index,
-                    status: result.status.clone(),
-                    is_available: result.is_available,
-                    query_method: result.query_method.clone(),
-                    response_time_ms: result.response_time_ms,
-                    error_message: result.error_message.clone(),
-                    checked_at: None,
-                });
-
-                // Batch write to database
-                if scan_items.len() >= self.config.batch_write_size {
-                    self.write_scan_items_locked(&conn, &scan_items);
-                    scan_items.clear();
-                }
+            if pending_items.len() >= self.config.batch_write_size.max(1)
+                || last_persist_at.elapsed()
+                    >= Duration::from_millis(self.config.progress_report_interval_ms.max(100))
+                || inflight.is_empty()
+            {
+                self.persist_progress_locked(
+                    &conn,
+                    task_id,
+                    run_id,
+                    completed_count,
+                    candidate.index + 1,
+                    available_count,
+                    error_count,
+                    &mut pending_items,
+                );
+                last_persist_at = Instant::now();
             }
 
-            // Write remaining items
-            if !scan_items.is_empty() {
-                self.write_scan_items_locked(&conn, &scan_items);
+            if last_progress_emit.elapsed()
+                >= Duration::from_millis(self.config.progress_report_interval_ms.max(100))
+                || inflight.is_empty()
+            {
+                let progress = self.make_progress(
+                    task_id,
+                    run_id,
+                    completed_count,
+                    total_count,
+                    available_count,
+                    error_count,
+                );
+                let _ = app.emit("scan-progress", &progress);
+                last_progress_emit = Instant::now();
             }
 
-            // Update progress in database
-            self.persist_progress_locked(
-                &conn,
-                task_id,
-                run_id,
-                completed_count,
-                generator.current_index(),
-                available_count,
-                error_count,
-            );
-
-            // Emit progress event to frontend
-            let progress = self.make_progress(
-                task_id,
-                completed_count,
-                total_count,
-                available_count,
-                error_count,
-            );
-            let _ = app.emit("scan-progress", &progress);
-
-            // Random delay between requests
             if self.config.request_delay_ms > 0 {
                 let jitter =
                     rand::Rng::gen_range(&mut rand::thread_rng(), 0..self.config.request_delay_ms);
                 tokio::time::sleep(std::time::Duration::from_millis(jitter)).await;
             }
+
+            self.fill_inflight(&mut inflight, &mut generator);
         }
 
         // Mark task as completed
+        self.persist_progress_locked(
+            &conn,
+            task_id,
+            run_id,
+            completed_count,
+            generator.current_index(),
+            available_count,
+            error_count,
+            &mut pending_items,
+        );
         {
             let c = conn.lock().map_err(|e| e.to_string())?;
             let repo = TaskRepo::new(&c);
@@ -233,6 +239,7 @@ impl ScanEngine {
 
         Ok(self.make_progress(
             task_id,
+            run_id,
             completed_count,
             total_count,
             available_count,
@@ -240,12 +247,22 @@ impl ScanEngine {
         ))
     }
 
-    fn write_scan_items_locked(&self, conn: &Mutex<rusqlite::Connection>, items: &[ScanItem]) {
-        if let Ok(c) = conn.lock() {
-            let repo = ScanItemRepo::new(&c);
-            if let Err(e) = repo.batch_insert(items) {
-                tracing::error!("Failed to batch insert scan items: {}", e);
-            }
+    fn fill_inflight(
+        &self,
+        inflight: &mut FuturesUnordered<
+            BoxFuture<'static, (DomainCandidate, crate::scanner::domain_checker::CheckResult)>,
+        >,
+        generator: &mut ListGenerator,
+    ) {
+        while inflight.len() < self.config.max_concurrency {
+            let Some(candidate) = next_candidate(generator) else {
+                break;
+            };
+            let checker = self.checker.clone();
+            inflight.push(Box::pin(async move {
+                let result = checker.check_domain(&candidate.domain).await;
+                (candidate, result)
+            }));
         }
     }
 
@@ -258,8 +275,17 @@ impl ScanEngine {
         completed_index: i64,
         available_count: i64,
         error_count: i64,
+        pending_items: &mut Vec<ScanItem>,
     ) {
         if let Ok(c) = conn.lock() {
+            if !pending_items.is_empty() {
+                let scan_repo = ScanItemRepo::new(&c);
+                if let Err(e) = scan_repo.batch_insert(pending_items) {
+                    tracing::error!("Failed to batch insert scan items: {}", e);
+                } else {
+                    pending_items.clear();
+                }
+            }
             let repo = TaskRepo::new(&c);
             if let Err(e) = repo.update_progress(
                 task_id,
@@ -282,6 +308,7 @@ impl ScanEngine {
     fn make_progress(
         &self,
         task_id: &str,
+        run_id: &str,
         completed_count: i64,
         total_count: i64,
         available_count: i64,
@@ -294,6 +321,7 @@ impl ScanEngine {
         };
         ScanProgress {
             task_id: task_id.to_string(),
+            run_id: run_id.to_string(),
             completed_count,
             total_count,
             available_count,
@@ -317,7 +345,7 @@ mod tests {
     #[test]
     fn test_scan_progress_calculation() {
         let engine = ScanEngine::with_default_config();
-        let progress = engine.make_progress("t1", 50, 100, 30, 2);
+        let progress = engine.make_progress("t1", "run1", 50, 100, 30, 2);
         assert_eq!(progress.completed_count, 50);
         assert_eq!(progress.total_count, 100);
         assert_eq!(progress.available_count, 30);
@@ -328,7 +356,16 @@ mod tests {
     #[test]
     fn test_scan_progress_zero_total() {
         let engine = ScanEngine::with_default_config();
-        let progress = engine.make_progress("t1", 0, 0, 0, 0);
+        let progress = engine.make_progress("t1", "run1", 0, 0, 0, 0);
         assert_eq!(progress.percent, 0.0);
+    }
+}
+
+fn next_candidate(generator: &mut ListGenerator) -> Option<DomainCandidate> {
+    let mut batch = generator.next_batch();
+    if batch.is_empty() {
+        None
+    } else {
+        Some(batch.remove(0))
     }
 }

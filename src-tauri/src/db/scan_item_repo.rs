@@ -98,7 +98,7 @@ impl<'a> ScanItemRepo<'a> {
             sql.push_str(" AND status = ?");
             param_values.push(Box::new(serde_json::to_string(s).unwrap()));
         }
-        sql.push_str(" ORDER BY item_index ASC LIMIT ? OFFSET ?");
+        sql.push_str(" ORDER BY checked_at DESC, id DESC LIMIT ? OFFSET ?");
         param_values.push(Box::new(limit));
         param_values.push(Box::new(offset));
 

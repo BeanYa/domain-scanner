@@ -51,6 +51,7 @@ impl Default for CheckConfig {
 }
 
 /// Domain availability checker using RDAP (primary) and DNS (fallback)
+#[derive(Clone)]
 pub struct DomainChecker {
     config: CheckConfig,
     http_client: reqwest::Client,
@@ -109,31 +110,24 @@ impl DomainChecker {
                 match self.check_dns_fallback(domain).await {
                     Ok(result) => {
                         let elapsed = start.elapsed().as_millis() as i64;
+                        let hint = if result {
+                            "DNS fallback suggests likely available"
+                        } else {
+                            "DNS fallback suggests likely registered"
+                        };
                         self.log(
                             "warn",
-                            format!(
-                                "DNS fallback completed for {}: {}",
-                                domain,
-                                if result {
-                                    "likely available"
-                                } else {
-                                    "registered or resolves"
-                                }
-                            ),
+                            format!("DNS fallback completed for {}: {}", domain, hint),
                         );
                         CheckResult {
                             domain: domain.to_string(),
-                            status: if result {
-                                ScanItemStatus::Available
-                            } else {
-                                ScanItemStatus::Unavailable
-                            },
-                            is_available: Some(result),
+                            status: ScanItemStatus::Error,
+                            is_available: None,
                             query_method: Some("dns".to_string()),
                             response_time_ms: Some(elapsed),
                             error_message: Some(format!(
-                                "RDAP failed: {}, used DNS fallback",
-                                e.message
+                                "RDAP failed: {}; DNS fallback completed but result is not authoritative, {}",
+                                e.message, hint
                             )),
                         }
                     }

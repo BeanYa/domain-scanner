@@ -199,6 +199,14 @@ pub struct ListTaskRunsRequest {
     pub task_id: String,
 }
 
+#[derive(Debug, Serialize)]
+struct PaginatedResponse<T> {
+    items: Vec<T>,
+    total: i64,
+    page: i64,
+    per_page: i64,
+}
+
 #[tauri::command]
 pub fn list_tasks(request: ListTasksRequest) -> Result<String, String> {
     let conn = init::open_db().map_err(|e| e.to_string())?;
@@ -226,6 +234,8 @@ pub fn list_tasks(request: ListTasksRequest) -> Result<String, String> {
 pub fn list_scan_items(request: ListScanItemsRequest) -> Result<String, String> {
     let conn = init::open_db().map_err(|e| e.to_string())?;
     let repo = ScanItemRepo::new(&conn);
+    let limit = request.limit.unwrap_or(10).max(1);
+    let offset = request.offset.unwrap_or(0).max(0);
 
     let status: Option<ScanItemStatus> = request.status.as_deref().and_then(|s| {
         serde_json::from_str::<ScanItemStatus>(s)
@@ -238,12 +248,21 @@ pub fn list_scan_items(request: ListScanItemsRequest) -> Result<String, String> 
             &request.task_id,
             request.run_id.as_deref(),
             status.as_ref(),
-            request.limit.unwrap_or(100),
-            request.offset.unwrap_or(0),
+            limit,
+            offset,
         )
         .map_err(|e| e.to_string())?;
+    let total = repo
+        .count_by_task(&request.task_id, request.run_id.as_deref(), status.as_ref())
+        .map_err(|e| e.to_string())?;
 
-    serde_json::to_string(&items).map_err(|e| e.to_string())
+    serde_json::to_string(&PaginatedResponse {
+        items,
+        total,
+        page: (offset / limit) + 1,
+        per_page: limit,
+    })
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -401,8 +420,9 @@ mod tests {
             offset: Some(0),
         };
         let result = list_scan_items(req).unwrap();
-        let items: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
-        assert!(items.is_empty());
+        let payload: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(payload["total"], 0);
+        assert!(payload["items"].as_array().unwrap().is_empty());
     }
 
     #[test]

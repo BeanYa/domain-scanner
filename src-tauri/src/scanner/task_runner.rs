@@ -66,6 +66,9 @@ impl TaskRunner {
         task_repo
             .update_status(&task_id, &TaskStatus::Running)
             .map_err(|e| e.to_string())?;
+        task_repo
+            .update_total_count(&task_id, total_count)
+            .map_err(|e| e.to_string())?;
         if matches!(task.status, TaskStatus::Paused) {
             run_repo
                 .update_status(&run.id, &TaskStatus::Running, false)
@@ -492,20 +495,22 @@ fn create_task_log_event(
     level: &str,
     message: &str,
 ) -> Result<TaskLogEventPayload, rusqlite::Error> {
-    let created_at = chrono::Utc::now().to_rfc3339();
     let repo = LogRepo::new(conn);
-    let id = repo.create(task_id, run_id, level, message)?;
+    let entry = repo.create_entry(task_id, run_id, level, message)?;
     Ok(TaskLogEventPayload {
-        id,
-        task_id: task_id.to_string(),
-        run_id: run_id.map(|id| id.to_string()),
-        level: level.to_string(),
-        message: message.to_string(),
-        created_at,
+        id: entry.id,
+        task_id: entry.task_id,
+        run_id: entry.run_id,
+        level: entry.level,
+        message: entry.message,
+        created_at: entry.created_at,
     })
 }
 
 fn emit_task_log_events(app: &AppHandle, payload: &TaskLogEventPayload) {
+    if payload.level == "info" {
+        return;
+    }
     let _ = app.emit("task-log-created", payload);
     let _ = app.emit(&format!("task-log-{}", payload.task_id), payload);
 }
