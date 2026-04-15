@@ -34,7 +34,7 @@ pub fn scan_preview(request: ScanPreviewRequest) -> Result<String, String> {
             };
             return serde_json::to_string(&response).map_err(|e| e.to_string());
         }
-        ScanMode::Regex { pattern } | ScanMode::Wildcard { pattern } => {
+        ScanMode::Regex { pattern: _pattern } | ScanMode::Wildcard { pattern: _pattern } => {
             // For preview, use first TLD to estimate prefix count
             let mut gen = ListGenerator::new(request.scan_mode.clone(), request.tlds.clone())
                 .with_batch_size(request.sample_count.unwrap_or(10));

@@ -1,7 +1,7 @@
 use crate::db::gpu_repo::GpuRepo;
 use crate::db::init;
 use crate::embedding::gpu_detector::GpuDetector;
-use crate::models::gpu::{GpuBackend, GpuConfig, GpuStatus};
+use crate::models::gpu::GpuBackend;
 use serde::Deserialize;
 
 #[tauri::command]

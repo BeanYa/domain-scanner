@@ -159,7 +159,7 @@ impl DomainChecker {
     /// DNS fallback: if no DNS records, domain might be available
     async fn check_dns_fallback(&self, domain: &str) -> Result<bool, String> {
         use hickory_resolver::TokioAsyncResolver;
-        use std::net::SocketAddr;
+
 
         let config = hickory_resolver::config::ResolverConfig::default();
         let opts = hickory_resolver::config::ResolverOpts::default();

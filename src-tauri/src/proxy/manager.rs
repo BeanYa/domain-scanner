@@ -1,6 +1,6 @@
 use crate::models::proxy::{ProxyConfig, ProxyType};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+
 
 /// Proxy rotation manager with Round-Robin and health checking
 pub struct ProxyManager {

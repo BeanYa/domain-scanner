@@ -17,7 +17,7 @@ pub struct FilterResult {
 #[tauri::command]
 pub fn filter_exact(request: FilterRequest) -> Result<String, String> {
     let conn = init::open_and_init(":memory:").map_err(|e| e.to_string())?;
-    let repo = FilterRepo::new(&conn);
+    let _repo = FilterRepo::new(&conn);
 
     // Exact match: query scan_items table directly
     let mut stmt = conn.prepare(
@@ -150,7 +150,7 @@ pub struct SemanticFilterRequest {
 }
 
 #[tauri::command]
-pub fn filter_semantic(request: SemanticFilterRequest) -> Result<String, String> {
+pub fn filter_semantic(_request: SemanticFilterRequest) -> Result<String, String> {
     let _conn = init::open_and_init(":memory:").map_err(|e| e.to_string())?;
 
     // Semantic filtering requires embedding generation and vector search

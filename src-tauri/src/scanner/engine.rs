@@ -2,7 +2,7 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 use crate::models::scan_item::{ScanItem, ScanItemStatus};
 use crate::models::task::TaskStatus;
-use crate::scanner::domain_checker::{CheckConfig, CheckResult, DomainChecker};
+use crate::scanner::domain_checker::{CheckConfig, DomainChecker};
 use crate::scanner::list_generator::ListGenerator;
 use crate::db::task_repo::TaskRepo;
 use crate::db::scan_item_repo::ScanItemRepo;
@@ -81,7 +81,7 @@ impl ScanEngine {
         let mut generator = ListGenerator::new(task.scan_mode.clone(), task.tlds.clone())
             .with_start_index(task.completed_index);
 
-        let semaphore = Arc::new(Semaphore::new(self.config.max_concurrency));
+        let _semaphore = Arc::new(Semaphore::new(self.config.max_concurrency));
         let mut completed_count = task.completed_count;
         let mut available_count = task.available_count;
         let mut error_count = task.error_count;

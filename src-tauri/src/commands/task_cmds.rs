@@ -1,5 +1,4 @@
 use crate::db::task_repo::TaskRepo;
-use crate::db::batch_repo::BatchRepo;
 use crate::db::init;
 use crate::models::task::{ScanMode, Task, TaskStatus};
 use crate::scanner::signature::generate_signature;

@@ -12,7 +12,7 @@ pub struct DomainCandidate {
 /// Generates domain candidates based on scan mode, yielding batches
 /// Supports multi-TLD cartesian product: each prefix x each TLD = one candidate
 pub struct ListGenerator {
-    mode: ScanMode,
+    _mode: ScanMode,
     tlds: Vec<String>,
     current_index: i64,
     total_count: i64,
@@ -26,7 +26,7 @@ impl ListGenerator {
         let prefixes = Self::generate_prefixes(&mode);
         let total_count = (prefixes.len() as i64) * (tlds.len() as i64);
         Self {
-            mode,
+            _mode: mode,
             tlds,
             current_index: 0,
             total_count,

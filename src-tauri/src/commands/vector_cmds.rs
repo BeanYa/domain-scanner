@@ -1,6 +1,5 @@
 use crate::db::init;
 use crate::embedding::gpu_detector::GpuDetector;
-use crate::embedding::local_model::LocalEmbeddingModel;
 use crate::models::gpu::{GpuBackend, GpuConfig};
 use serde::{Deserialize, Serialize};
 

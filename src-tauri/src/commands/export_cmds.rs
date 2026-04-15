@@ -1,7 +1,6 @@
 use crate::db::scan_item_repo::ScanItemRepo;
 use crate::db::init;
 use crate::export::exporter::{self, ExportFormat, ExportOptions};
-use crate::models::scan_item::ScanItem;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
