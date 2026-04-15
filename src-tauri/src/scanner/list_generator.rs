@@ -11,27 +11,33 @@ pub struct DomainCandidate {
 /// Streaming domain list generator
 /// Generates domain candidates based on scan mode, yielding batches
 /// Supports multi-TLD cartesian product: each prefix x each TLD = one candidate
+enum PrefixSource {
+    List(Vec<String>),
+    Cartesian { charset: Vec<char>, count: usize },
+}
+
 pub struct ListGenerator {
     _mode: ScanMode,
     tlds: Vec<String>,
     current_index: i64,
     total_count: i64,
     batch_size: usize,
-    // Pre-generated prefixes
-    prefixes: Vec<String>,
+    prefix_source: PrefixSource,
+    prefix_count: usize,
 }
 
 impl ListGenerator {
     pub fn new(mode: ScanMode, tlds: Vec<String>) -> Self {
-        let prefixes = Self::generate_prefixes(&mode);
-        let total_count = (prefixes.len() as i64) * (tlds.len() as i64);
+        let (prefix_source, prefix_count) = Self::build_prefix_source(&mode);
+        let total_count = (prefix_count as i64).saturating_mul(tlds.len() as i64);
         Self {
             _mode: mode,
             tlds,
             current_index: 0,
             total_count,
             batch_size: 5000,
-            prefixes,
+            prefix_source,
+            prefix_count,
         }
     }
 
@@ -48,7 +54,7 @@ impl ListGenerator {
 
     /// Get the number of unique prefixes
     pub fn prefix_count(&self) -> usize {
-        self.prefixes.len()
+        self.prefix_count
     }
 
     /// Get the number of TLDs
@@ -83,7 +89,7 @@ impl ListGenerator {
             .map(|i| {
                 let prefix_idx = (i / tld_count) as usize;
                 let tld_idx = (i % tld_count) as usize;
-                let prefix = &self.prefixes[prefix_idx];
+                let prefix = self.prefix_at(prefix_idx);
                 let tld = &self.tlds[tld_idx];
                 DomainCandidate {
                     domain: format!("{}{}", prefix, tld),
@@ -96,40 +102,64 @@ impl ListGenerator {
         batch
     }
 
-    /// Generate candidate prefixes based on scan mode
-    fn generate_prefixes(mode: &ScanMode) -> Vec<String> {
+    fn build_prefix_source(mode: &ScanMode) -> (PrefixSource, usize) {
         match mode {
-            ScanMode::Regex { pattern } => Self::generate_from_regex(pattern),
-            ScanMode::Wildcard { pattern } => Self::generate_from_wildcard(pattern),
-            ScanMode::Llm { prompt, .. } => prompt
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect(),
-            ScanMode::Manual { domains } => domains.clone(),
+            ScanMode::Regex { pattern } => Self::build_from_regex(pattern),
+            ScanMode::Wildcard { pattern } => Self::build_from_wildcard(pattern),
+            ScanMode::Llm { prompt, .. } => {
+                let prefixes: Vec<String> = prompt
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                let count = prefixes.len();
+                (PrefixSource::List(prefixes), count)
+            }
+            ScanMode::Manual { domains } => {
+                let prefixes = domains.clone();
+                let count = prefixes.len();
+                (PrefixSource::List(prefixes), count)
+            }
         }
     }
 
-    /// Generate domain prefixes from a regex pattern
-    fn generate_from_regex(pattern: &str) -> Vec<String> {
+    fn prefix_at(&self, index: usize) -> String {
+        match &self.prefix_source {
+            PrefixSource::List(prefixes) => prefixes[index].clone(),
+            PrefixSource::Cartesian { charset, count } => {
+                build_cartesian_string(charset, *count, index)
+            }
+        }
+    }
+
+    /// Build prefix source from a regex pattern
+    fn build_from_regex(pattern: &str) -> (PrefixSource, usize) {
         let pattern = pattern.trim_start_matches('^').trim_end_matches('$');
 
         if let Some(captures) = regex_pattern_parse(pattern) {
             let (charset, count) = captures;
-            return generate_cartesian_product(&charset, count);
+            let prefix_count = charset.len().pow(count as u32);
+            return (PrefixSource::Cartesian { charset, count }, prefix_count);
         }
 
-        vec![pattern.to_string()]
+        (PrefixSource::List(vec![pattern.to_string()]), 1)
     }
 
-    /// Generate domain prefixes from a wildcard pattern
-    fn generate_from_wildcard(pattern: &str) -> Vec<String> {
+    /// Build prefix source from a wildcard pattern
+    fn build_from_wildcard(pattern: &str) -> (PrefixSource, usize) {
         let question_count = pattern.chars().filter(|&c| c == '?').count();
         if question_count == 0 {
-            return vec![pattern.to_string()];
+            return (PrefixSource::List(vec![pattern.to_string()]), 1);
         }
         let charset: Vec<char> = ('a'..='z').collect();
-        generate_cartesian_product(&charset, question_count)
+        let prefix_count = charset.len().pow(question_count as u32);
+        (
+            PrefixSource::Cartesian {
+                charset,
+                count: question_count,
+            },
+            prefix_count,
+        )
     }
 }
 
@@ -174,22 +204,21 @@ fn parse_charset(s: &str) -> Option<Vec<char>> {
     }
 }
 
-/// Generate cartesian product of charset repeated count times
-fn generate_cartesian_product(charset: &[char], count: usize) -> Vec<String> {
-    if count == 0 {
-        return vec![String::new()];
+fn build_cartesian_string(charset: &[char], count: usize, index: usize) -> String {
+    if count == 0 || charset.is_empty() {
+        return String::new();
     }
-    let mut results = vec![String::new()];
-    for _ in 0..count {
-        let mut new_results = Vec::with_capacity(results.len() * charset.len());
-        for prefix in &results {
-            for c in charset {
-                new_results.push(format!("{}{}", prefix, c));
-            }
-        }
-        results = new_results;
+
+    let base = charset.len();
+    let mut value = index;
+    let mut chars = vec![charset[0]; count];
+
+    for slot in (0..count).rev() {
+        chars[slot] = charset[value % base];
+        value /= base;
     }
-    results
+
+    chars.into_iter().collect()
 }
 
 /// Estimate the number of candidates a pattern will generate per TLD
@@ -208,32 +237,55 @@ mod tests {
 
     #[test]
     fn test_generate_from_regex_3letter() {
-        let prefixes = ListGenerator::generate_prefixes(&ScanMode::Regex {
-            pattern: "^[a-z]{3}$".to_string(),
-        });
-        assert_eq!(prefixes.len(), 17576); // 26^3
-        assert_eq!(prefixes[0], "aaa");
-        assert_eq!(prefixes[17575], "zzz");
+        let gen = ListGenerator::new(
+            ScanMode::Regex {
+                pattern: "^[a-z]{3}$".to_string(),
+            },
+            vec![".com".to_string()],
+        );
+        assert_eq!(gen.prefix_count(), 17576); // 26^3
+        assert_eq!(gen.prefix_at(0), "aaa");
+        assert_eq!(gen.prefix_at(17575), "zzz");
     }
 
     #[test]
     fn test_generate_from_regex_digits() {
-        let prefixes = ListGenerator::generate_prefixes(&ScanMode::Regex {
-            pattern: "^[0-9]{2}$".to_string(),
-        });
-        assert_eq!(prefixes.len(), 100); // 10^2
-        assert_eq!(prefixes[0], "00");
-        assert_eq!(prefixes[99], "99");
+        let gen = ListGenerator::new(
+            ScanMode::Regex {
+                pattern: "^[0-9]{2}$".to_string(),
+            },
+            vec![".com".to_string()],
+        );
+        assert_eq!(gen.prefix_count(), 100); // 10^2
+        assert_eq!(gen.prefix_at(0), "00");
+        assert_eq!(gen.prefix_at(99), "99");
     }
 
     #[test]
     fn test_generate_from_wildcard() {
-        let prefixes = ListGenerator::generate_prefixes(&ScanMode::Wildcard {
-            pattern: "??".to_string(),
-        });
-        assert_eq!(prefixes.len(), 676); // 26^2
-        assert_eq!(prefixes[0], "aa");
-        assert_eq!(prefixes[675], "zz");
+        let gen = ListGenerator::new(
+            ScanMode::Wildcard {
+                pattern: "??".to_string(),
+            },
+            vec![".com".to_string()],
+        );
+        assert_eq!(gen.prefix_count(), 676); // 26^2
+        assert_eq!(gen.prefix_at(0), "aa");
+        assert_eq!(gen.prefix_at(675), "zz");
+    }
+
+    #[test]
+    fn test_large_generator_is_lazy() {
+        let gen = ListGenerator::new(
+            ScanMode::Regex {
+                pattern: "^[a-z]{5}$".to_string(),
+            },
+            vec![".com".to_string(), ".net".to_string()],
+        );
+        assert_eq!(gen.prefix_count(), 11881376);
+        assert_eq!(gen.total_count(), 23762752);
+        assert_eq!(gen.prefix_at(0), "aaaaa");
+        assert_eq!(gen.prefix_at(25), "aaaaz");
     }
 
     #[test]
@@ -346,7 +398,7 @@ mod tests {
         let mode = ScanMode::Regex {
             pattern: "^[a-z]{3}$".to_string(),
         };
-        let mut gen = ListGenerator::new(
+        let gen = ListGenerator::new(
             mode,
             vec![".com".to_string(), ".net".to_string(), ".org".to_string()],
         );

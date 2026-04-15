@@ -3,6 +3,7 @@ import { listenEvent } from "../services/tauri";
 
 interface TaskProgressEvent {
   task_id: string;
+  run_id: string;
   completed_count: number;
   total_count: number;
   available_count: number;
@@ -28,7 +29,7 @@ export function useTaskEvents(
     const setup = async () => {
       if (onProgress) {
         unlistenProgressRef.current = await listenEvent<TaskProgressEvent>(
-          "task-progress",
+          "scan-progress",
           onProgress
         );
       }

@@ -186,14 +186,6 @@ export default function TaskDetail() {
             : run
         )
       );
-      if (progress.run_id === effectiveRunId && resultPage === 1) {
-        if (resultRefreshTimerRef.current) {
-          window.clearTimeout(resultRefreshTimerRef.current);
-        }
-        resultRefreshTimerRef.current = window.setTimeout(() => {
-          fetchResults();
-        }, 250);
-      }
     });
     const unlistenResults = listenEvent<ScanResultsUpdated>("scan-results-updated", (payload) => {
       if (payload.task_id !== id) return;
@@ -242,11 +234,15 @@ export default function TaskDetail() {
     if (!task || task.status !== "running") return;
     const interval = setInterval(() => {
       fetchRuns();
-      fetchResults();
-      fetchLogs();
-    }, 1500);
+      if (resultPage === 1) {
+        fetchResults();
+      }
+      if (showLogs) {
+        fetchLogs();
+      }
+    }, 5000);
     return () => clearInterval(interval);
-  }, [tasks, id, fetchRuns, fetchResults, fetchLogs]);
+  }, [tasks, id, resultPage, showLogs, fetchRuns, fetchResults, fetchLogs]);
 
   const task = tasks.find((t) => t.id === id);
   const selectedRun = useMemo(
