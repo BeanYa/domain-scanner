@@ -2,6 +2,8 @@ import { useState, Fragment } from "react";
 import { Zap, Regex, Type, Brain, List, ChevronRight, CheckCircle, AlertTriangle, Sparkles, Globe, Search } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { TLD_LIST, POPULAR_TLDS, TLDS_BY_CATEGORY, type TldCategory } from "../data/tlds";
+import { useTaskStore } from "../store/taskStore";
+import type { ScanMode } from "../types";
 
 type ScanTab = "regex" | "llm" | "manual";
 type Step = 1 | 2 | 3;
@@ -22,9 +24,12 @@ export default function NewTask() {
   const [selectedTlds, setSelectedTlds] = useState<string[]>([".com"]);
   const [taskName, setTaskName] = useState("");
   const [created, setCreated] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [tldView, setTldView] = useState<TldView>("popular");
   const [tldSearch, setTldSearch] = useState("");
   const navigate = useNavigate();
+  const { createTasks } = useTaskStore();
 
   const tabs: { key: ScanTab; label: string; icon: typeof Regex; desc: string }[] = [
     { key: "regex", label: "正则 / 通配符", icon: Regex, desc: "用正则表达式或通配符生成域名前缀列表" },
@@ -66,9 +71,30 @@ export default function NewTask() {
     return 0;
   };
 
-  const handleCreate = () => {
-    setCreated(true);
-    setTimeout(() => navigate("/tasks"), 1500);
+  const handleCreate = async () => {
+    setError(null);
+    setCreating(true);
+    try {
+      let scanMode: ScanMode;
+      if (activeTab === "regex") {
+        scanMode = { type: "regex", pattern };
+      } else if (activeTab === "llm") {
+        scanMode = { type: "llm", config_id: "", prompt: llmPrompt };
+      } else {
+        const domains = manualDomains.split("\n").map((d) => d.trim()).filter(Boolean);
+        scanMode = { type: "manual", domains };
+      }
+
+      const name = taskName || `${activeTab === "regex" ? "正则扫描" : activeTab === "llm" ? "LLM扫描" : "手动扫描"} ${selectedTlds.join("/")}`;
+
+      await createTasks(name, scanMode, selectedTlds);
+      setCreated(true);
+      setTimeout(() => navigate("/tasks"), 1500);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setCreating(false);
+    }
   };
 
   // Filter TLDs by search
@@ -359,15 +385,20 @@ export default function NewTask() {
             </p>
           )}
         </div>
-        <button
-          onClick={handleCreate}
-          disabled={selectedTlds.length === 0 || (activeTab === "regex" && !pattern)}
-          className="cyber-btn-primary cyber-btn-lg disabled:opacity-40 disabled:hover:translate-y-0 disabled:hover:shadow-none"
-        >
-          <Zap className="w-4.5 h-4.5" />
-          创建并启动
-          <ChevronRight className="w-4 h-4" />
-        </button>
+        <div className="flex flex-col items-end gap-2">
+          {error && (
+            <p className="text-xs text-cyber-red">{error}</p>
+          )}
+          <button
+            onClick={handleCreate}
+            disabled={creating || selectedTlds.length === 0 || (activeTab === "regex" && !pattern)}
+            className="cyber-btn-primary cyber-btn-lg disabled:opacity-40 disabled:hover:translate-y-0 disabled:hover:shadow-none"
+          >
+            <Zap className="w-4.5 h-4.5" />
+            {creating ? "创建中..." : "创建并启动"}
+            {!creating && <ChevronRight className="w-4 h-4" />}
+          </button>
+        </div>
       </div>
     </div>
   );
