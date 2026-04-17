@@ -245,7 +245,7 @@
     @apply transition-colors duration-150 hover:border-cyber-border-light;
   }
 
-  /* ---- Runway-style page primitives ---- */
+  /* ---- Domain Scanner page primitives ---- */
   .page-shell {
     @apply space-y-6 animate-fade-in;
   }

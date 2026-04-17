@@ -34,9 +34,9 @@ export default {
         },
       },
       fontFamily: {
-        sans: ['"abcNormal"', '"Aptos"', '"Segoe UI"', "system-ui", "sans-serif"],
+        sans: ['"Aptos"', '"Segoe UI"', "system-ui", "sans-serif"],
         mono: ['"JetBrains Mono"', '"Cascadia Mono"', "Consolas", "monospace"],
-        display: ['"abcNormal"', '"Aptos"', '"Segoe UI"', "sans-serif"],
+        display: ['"Aptos"', '"Segoe UI"', "system-ui", "sans-serif"],
       },
       fontSize: {
         "2xs": ["0.625rem", { lineHeight: "0.875rem" }],

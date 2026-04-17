@@ -1,244 +1,225 @@
-# Design System Inspired by Runway
+# Domain Scanner Design System
 
-## 1. Visual Theme & Atmosphere
+## 1. Product Direction
 
-Runway's interface is a cinematic reel brought to life as a website — a dark, editorial, film-production-grade design where full-bleed photography and video ARE the primary UI elements. This is not a typical tech product page; it's a visual manifesto for AI-powered creativity. Every section feels like a frame from a film: dramatic lighting, sweeping landscapes, and intimate human moments captured in high-quality imagery that dominates the viewport.
+Domain Scanner is a professional desktop application for high-volume domain discovery, scanning, filtering, vector search, and LLM-assisted analysis. The interface should feel precise, operational, and calm under load. It is a tool for scanning large candidate sets, monitoring long-running jobs, and inspecting result quality, so the visual system favors dense readable data, predictable controls, and clear state communication.
 
-The design language is built on a single typeface — abcNormal — a clean, geometric sans-serif that handles everything from 48px display headlines to 11px uppercase labels. This single-font commitment creates an extreme typographic uniformity that lets the visual content speak louder than the text. Headlines use tight line-heights (1.0) with negative letter-spacing (-0.9px to -1.2px), creating compressed text blocks that feel like film titles rather than marketing copy.
+The product aesthetic is dark, editorial, and utilitarian. It uses restrained surfaces, fine borders, compact typography, and monochrome structure with muted semantic accents. Visual weight should come from live metrics, tables, logs, charts, progress, and domain result cards rather than decorative illustration.
 
-What makes Runway distinctive is its complete commitment to visual content as design. Rather than illustrating features with icons or diagrams, Runway shows actual AI-generated and AI-enhanced imagery — cars driving through cinematic landscapes, artistic portraits, architectural renders. The interface itself retreats into near-invisibility: minimal borders, zero shadows, subtle cool-gray text, and a dark palette that puts maximum focus on the photography.
+## 2. Core Principles
 
-**Key Characteristics:**
-- Cinematic full-bleed photography and video as primary UI elements
-- Single typeface system: abcNormal for everything from display to micro labels
-- Dark-dominant palette with cool-toned neutrals (#767d88, #7d848e)
-- Zero shadows, minimal borders — the interface is intentionally invisible
-- Tight display typography (line-height 1.0) with negative tracking (-0.9px to -1.2px)
-- Uppercase labels with positive letter-spacing for navigational structure
-- Weight 450 (unusual intermediate) for small uppercase text — precision craft
-- Editorial magazine layout with mixed-size image grids
+- **Operational clarity**: Every screen should answer what is running, what changed, what needs attention, and what action is available.
+- **Dense but readable**: Use compact spacing for tables, logs, and metrics without sacrificing scannability.
+- **Calm status language**: Reserve color for scan state, risk, success, warnings, and destructive actions.
+- **No borrowed branding**: UI copy, navigation, and examples must refer to Domain Scanner concepts only.
+- **No decorative shadows**: Use background contrast, borders, and spacing for hierarchy.
+- **Stable layouts**: Progress, counters, task rows, and controls must not resize when values update.
+- **Accessible focus**: Keyboard focus must remain visible on all interactive elements.
 
-## 2. Color Palette & Roles
+## 3. Color Palette
 
-### Primary
-- **Runway Black** (`#000000`): The primary page background and maximum-emphasis text.
-- **Deep Black** (`#030303`): A near-imperceptible variant for layered dark surfaces.
-- **Dark Surface** (`#1a1a1a`): Card backgrounds and elevated dark containers.
-- **Pure White** (`#ffffff`): Primary text on dark surfaces and light-section backgrounds.
+### Backgrounds
 
-### Surface & Background
-- **Near White** (`#fefefe`): The lightest surface — barely distinguishable from pure white.
-- **Cool Cloud** (`#e9ecf2`): Light section backgrounds with a cool blue-gray tint.
-- **Border Dark** (`#27272a`): The single dark-mode border color — barely visible containment.
+| Token | Hex | Role |
+| --- | --- | --- |
+| `cyber.bg` | `#000000` | App background |
+| `cyber.bg-elevated` | `#030303` | Raised panels and page sections |
+| `cyber.surface` | `#0c0c0c` | Inputs, dense containers, table headers |
+| `cyber.card` | `#111111` | Cards and row hover base |
+| `cyber.card-hover` | `#1a1a1a` | Active and hover surfaces |
 
-### Neutrals & Text
-- **Charcoal** (`#404040`): Primary body text on light surfaces and secondary text.
-- **Near Charcoal** (`#3f3f3f`): Slightly lighter variant for dark-section secondary text.
-- **Cool Slate** (`#767d88`): Secondary body text — a distinctly blue-gray cool neutral.
-- **Mid Slate** (`#7d848e`): Tertiary text, metadata descriptions.
-- **Muted Gray** (`#a7a7a7`): De-emphasized content, timestamps.
-- **Cool Silver** (`#c9ccd1`): Light borders and dividers.
-- **Light Silver** (`#d0d4d4`): The lightest border/divider variant.
-- **Tailwind Gray** (`#6b7280`): Standard Tailwind neutral for supplementary text.
-- **Dark Link** (`#0c0c0c`): Darkest link text — nearly black.
-- **Footer Gray** (`#999999`): Footer links and deeply muted content.
+### Borders And Text
 
-### Gradient System
-- **None in the interface.** Visual richness comes entirely from photographic content — AI-generated and enhanced imagery provides all the color and gradient the design needs. The interface itself is intentionally colorless.
+| Token | Hex | Role |
+| --- | --- | --- |
+| `cyber.border` | `#27272a` | Default border |
+| `cyber.border-light` | `#3f3f3f` | Hover border and secondary dividers |
+| `cyber.text` | `#ffffff` | Primary text |
+| `cyber.text-secondary` | `#c9ccd1` | Secondary text and values |
+| `cyber.muted` | `#767d88` | Labels, helper copy, metadata |
+| `cyber.muted-dim` | `#565d66` | Placeholders and disabled detail |
 
-## 3. Typography Rules
+### Semantic Accents
 
-### Font Family
-- **Universal**: `abcNormal`, with fallback: `abcNormal Fallback`
+| Token | Hex | Use |
+| --- | --- | --- |
+| `cyber.green` | `#e8ece8` | Running, available, success |
+| `cyber.blue` | `#dce2ea` | Completed, informational |
+| `cyber.orange` | `#d8c7a4` | Paused, pending, warning |
+| `cyber.red` | `#e2aaa6` | Error, failed, destructive |
+| `cyber.purple` | `#d0d4d4` | Vector/LLM secondary accent |
 
-*Note: abcNormal is a custom geometric sans-serif. For external implementations, Inter or DM Sans serve as close substitutes.*
+Use accent colors sparingly. Most UI should remain black, near-black, white, and cool gray.
 
-### Hierarchy
+## 4. Typography
 
-| Role | Font | Size | Weight | Line Height | Letter Spacing | Notes |
-|------|------|------|--------|-------------|----------------|-------|
-| Display / Hero | abcNormal | 48px (3rem) | 400 | 1.00 (tight) | -1.2px | Maximum size, film-title presence |
-| Section Heading | abcNormal | 40px (2.5rem) | 400 | 1.00–1.10 | -1px to 0px | Feature section titles |
-| Sub-heading | abcNormal | 36px (2.25rem) | 400 | 1.00 (tight) | -0.9px | Secondary section markers |
-| Card Title | abcNormal | 24px (1.5rem) | 400 | 1.00 (tight) | normal | Article and card headings |
-| Feature Title | abcNormal | 20px (1.25rem) | 400 | 1.00 (tight) | normal | Small headings |
-| Body / Button | abcNormal | 16px (1rem) | 400–600 | 1.30–1.50 | -0.16px to normal | Standard body, nav links |
-| Caption / Label | abcNormal | 14px (0.88rem) | 500–600 | 1.25–1.43 | 0.35px (uppercase) | Metadata, section labels |
-| Small | abcNormal | 13px (0.81rem) | 400 | 1.30 (tight) | -0.16px to -0.26px | Compact descriptions |
-| Micro / Tag | abcNormal | 11px (0.69rem) | 450 | 1.30 (tight) | normal | Uppercase tags, tiny labels |
+### Font Stack
 
-### Principles
-- **One typeface, complete expression**: abcNormal handles every text role. The design achieves variety through size, weight, case, and letter-spacing rather than font-family switching.
-- **Tight everywhere**: Nearly every size uses line-height 1.0–1.30 — even body text is relatively compressed. This creates a dense, editorial feel.
-- **Weight 450 — the precision detail**: Some small uppercase labels use weight 450, an uncommon intermediate between regular (400) and medium (500). This micro-craft signals typographic sophistication.
-- **Negative tracking as default**: Even body text uses -0.16px to -0.26px letter-spacing, keeping everything slightly tighter than default.
-- **Uppercase as structure**: Labels at 14px and 11px use `text-transform: uppercase` with positive letter-spacing (0.35px) to create navigational signposts that contrast with the tight lowercase text.
+The project uses a deterministic system font stack rather than a proprietary custom font:
 
-## 4. Component Stylings
+```css
+font-family: "Aptos", "Segoe UI", system-ui, sans-serif;
+```
 
-### Buttons
-- Text: weight 600 at 14px abcNormal
-- Background: likely transparent or dark, with minimal border
-- Radius: small (4px) for button-like links
-- The button design is extremely restrained — no heavy fills or borders detected
-- Interactive elements blend into the editorial flow
+Monospace content uses:
 
-### Cards & Containers
-- Background: transparent or Dark Surface (`#1a1a1a`)
-- Border: `1px solid #27272a` (dark mode) — barely visible containment
-- Radius: small (4–8px) for functional elements; 16px for alert-style containers
-- Shadow: zero — no shadows on any element
-- Cards are primarily photographic — the image IS the card
+```css
+font-family: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+```
+
+This keeps screenshots and production builds stable across developer machines without adding a font asset or license requirement.
+
+### Type Scale
+
+| Role | Size | Weight | Line Height | Letter Spacing | Typical Use |
+| --- | --- | --- | --- | --- | --- |
+| Page heading | 32-40px | 400 | 1.0 | 0 | Dashboard and page titles |
+| Section title | 16-20px | 500-600 | 1.25 | 0 | Panel headings |
+| Body | 14px | 400 | 1.5 | 0 | Forms, descriptions, row text |
+| Dense body | 13px | 400 | 1.35 | 0 | Tables, result metadata |
+| Label | 11-12px | 500-600 | 1.3 | 0 | Uppercase labels, tags |
+| Numeric metric | 24-32px | 400-500 | 1.0 | 0 | Counts, rates, totals |
+| Log/Domain | 12-13px | 400 | 1.4 | 0 | Logs, domain names, IDs |
+
+The current base stylesheet intentionally normalizes `letter-spacing` to `0`. Do not rely on Tailwind `tracking-*` utilities unless that global rule is removed in a dedicated style-system change.
+
+## 5. Layout
+
+### App Shell
+
+- Left sidebar for persistent navigation: Dashboard, Tasks, New Task, Filter, Vectorize, Proxies, Settings.
+- Main content uses constrained horizontal padding and full-height scroll behavior.
+- Page headers should include a clear title, short supporting text, and primary action when relevant.
+- Keep scan controls close to the data they affect.
+
+### Spacing
+
+- Base unit: 4px.
+- Common gaps: 8px, 12px, 16px, 20px, 24px.
+- Page section gaps: 24px.
+- Dense table/log padding: 8-12px.
+- Form group spacing: 16px.
+
+### Containers
+
+- Use `editorial-panel` for major panels.
+- Use `metric-tile` for compact statistics.
+- Use `task-card` for navigable task summaries.
+- Avoid nesting full cards inside other full cards.
+- Prefer full-width panels for tables, logs, and charts.
+
+## 6. Components
 
 ### Navigation
-- Minimal horizontal nav — transparent over hero content
-- Logo: Runway wordmark in white/black
-- Links: abcNormal at 16px, weight 400–600
-- Hover: text shifts to white or higher opacity
-- Extremely subtle — designed to not compete with visual content
 
-### Image Treatment
-- Full-bleed cinematic photography and video dominate
-- AI-generated content shown at large scale as primary visual elements
-- Mixed-size image grids creating editorial magazine layouts
-- Dark overlays on hero images for text readability
-- Product screenshots with subtle rounded corners (8px)
+- The sidebar is the primary navigation surface.
+- Active route should use stronger text contrast and a subtle surface change.
+- Icons should support quick scanning, but labels remain visible on desktop.
+- Do not use external product wordmarks or brand references.
 
-### Distinctive Components
+### Buttons
 
-**Cinematic Hero**
-- Full-viewport image or video with text overlay
-- Headline in 48px abcNormal, white on dark imagery
-- The image is always cinematic quality — film-grade composition
+- Primary action: white background, black text, solid border.
+- Secondary action: transparent background, muted text, thin border.
+- Ghost action: text-only with subtle hover surface.
+- Danger action: red text and red-tinted border.
+- Buttons use 4-8px radius, never pill-shaped.
+- Icon-only buttons need stable square dimensions and accessible labels.
 
-**Research Article Cards**
-- Photographic thumbnails with article titles
-- Mixed-size grid layout (large feature + smaller supporting)
-- Clean text overlay or below-image caption style
+### Forms
 
-**Trust Bar**
-- Company logos (leading organizations across industries)
-- Clean, monochrome treatment
-- Horizontal layout with generous spacing
+- Inputs use dark surfaces with visible borders.
+- Placeholder text uses `cyber.muted-dim`.
+- Validation states use semantic border color and concise helper text.
+- Long-running actions must expose disabled and loading states.
 
-**Mission Statement**
-- "We are building AI to simulate the world through imagination, art and aesthetics"
-- On a dark background with white text
-- The emotional close — artistic and philosophical
+### Tables And Result Lists
 
-## 5. Layout Principles
+- Tables are first-class UI, not secondary content.
+- Header rows use `cyber.surface`, uppercase labels, and muted text.
+- Body rows use compact padding and visible hover state.
+- Domain names, task IDs, run IDs, and log fragments may use the monospace stack.
+- Pagination must keep controls stable as totals change.
 
-### Spacing System
-- Base unit: 8px
-- Scale: 4px, 6px, 8px, 12px, 16px, 20px, 24px, 28px, 32px, 48px, 64px, 78px
-- Section vertical spacing: generous (48–78px)
-- Component gaps: 16–24px
+### Task Cards
 
-### Grid & Container
-- Max container width: up to 1600px (cinema-wide)
-- Hero: full-viewport, edge-to-edge
-- Content sections: centered with generous margins
-- Image grids: asymmetric, magazine-style mixed sizes
-- Footer: full-width dark section
+Task cards should show:
 
-### Whitespace Philosophy
-- **Cinema-grade breathing**: Large vertical gaps between sections create a scrolling experience that feels like watching scenes change.
-- **Images replace whitespace**: Where other sites use empty space, Runway fills it with photography. The visual content IS the breathing room.
-- **Editorial grid asymmetry**: The image grid uses intentionally varied sizes — large hero images paired with smaller supporting images, creating visual rhythm.
+- Task name or generated scan label.
+- Current status.
+- Candidate count, completed count, available count, and error count when available.
+- Last update time.
+- Progress bar when running or resumable.
+- Direct actions only when they are safe and expected from the list view.
 
-### Border Radius Scale
-- Sharp (4px): Buttons, small interactive elements
-- Subtle (6px): Links, small containers
-- Comfortable (8px): Standard containers, image cards
-- Generous (16px): Alert-style containers, featured elements
+### Progress
 
-## 6. Depth & Elevation
+- Progress bars use low-height tracks with white or semantic fills.
+- Show numeric progress when available.
+- Indeterminate states should animate subtly and avoid layout shifts.
+- High-volume scans should prefer throttled updates over rapid visual churn.
 
-| Level | Treatment | Use |
-|-------|-----------|-----|
-| Flat (Level 0) | No shadow, no border | Everything — the dominant state |
-| Bordered (Level 1) | `1px solid #27272a` | Alert containers only |
-| Dark Section (Level 2) | Dark bg (#000000 / #1a1a1a) with light text | Hero, features, footer |
-| Light Section (Level 3) | White/Cool Cloud bg with dark text | Content sections, research |
+### Logs
 
-**Shadow Philosophy**: Runway uses **zero shadows**. This is a film-production design decision — in cinema, depth comes from lighting, focus, and composition, not drop shadows. The interface mirrors this philosophy: depth is communicated through dark/light section alternation, photographic depth-of-field, and overlay transparency — never through CSS box-shadow.
+- Logs are operational evidence and should remain readable.
+- Use monospace text, compact line-height, and muted timestamps.
+- Keep severity color minimal.
+- Tail windows should not cause the surrounding layout to jump.
 
-## 7. Do's and Don'ts
+### Charts And Metrics
 
-### Do
-- Use full-bleed cinematic photography as the primary visual element
-- Use abcNormal for all text — maintain the single-typeface commitment
-- Keep display line-heights at 1.0 with negative letter-spacing for film-title density
-- Use the cool-gray neutral palette (#767d88, #7d848e) for secondary text
-- Maintain zero shadows — depth comes from photography and section backgrounds
-- Use uppercase with letter-spacing for navigational labels (14px, 0.35px spacing)
-- Apply small border-radius (4–8px) — the design is NOT pill-shaped
-- Let visual content (photos, videos) dominate — the UI should be invisible
-- Use weight 450 for micro labels — the precision matters
+- Charts should support comparison and trend inspection, not decoration.
+- Use muted grid lines and high-contrast values.
+- Avoid saturated chart palettes unless semantic differences require them.
+- Metric tiles should be compact and sortable by importance.
 
-### Don't
-- Don't add decorative colors to the interface — the only color comes from photography
-- Don't use heavy borders or shadows — the interface must be nearly invisible
-- Don't use pill-shaped radius — Runway's geometry is subtly rounded, not circular
-- Don't use bold (700+) weight — 400–600 is the full range, with 450 as a precision tool
-- Don't compete with the visual content — text overlays should be minimal and restrained
-- Don't use gradient backgrounds in the interface — gradients exist only in photography
-- Don't use more than one typeface — abcNormal handles everything
-- Don't use body line-height above 1.50 — the tight, editorial feel is core
-- Don't reduce image quality — cinematic photography IS the design
+### Empty States
 
-## 8. Responsive Behavior
+Empty states must explain the immediate next action in product terms:
 
-### Breakpoints
-| Name | Width | Key Changes |
-|------|-------|-------------|
-| Mobile | <640px | Single column, stacked images, reduced hero text |
-| Tablet | 640–768px | 2-column image grids begin |
-| Small Desktop | 768–1024px | Standard layout |
-| Desktop | 1024–1280px | Full layout, expanded hero |
-| Large Desktop | 1280–1600px | Maximum cinema-width container |
+- No tasks: create a new scan.
+- No results: wait for scan progress or adjust filters.
+- No proxies: add a proxy or continue without one.
+- No vector index: vectorize results before semantic filtering.
 
-### Touch Targets
-- Navigation links at comfortable 16px
-- Article cards serve as large touch targets
-- Buttons at 14px weight 600 with adequate padding
+Do not use generic marketing copy or unrelated mission statements.
 
-### Collapsing Strategy
-- **Navigation**: Collapses to hamburger on mobile
-- **Hero**: Full-bleed maintained, text scales down
-- **Image grids**: Multi-column → 2-column → single column
-- **Research articles**: Feature-size cards → stacked full-width
-- **Trust logos**: Horizontal scroll or reduced grid
+## 7. Responsive Behavior
 
-### Image Behavior
-- Cinematic images scale proportionally
-- Full-bleed hero maintained across all sizes
-- Image grids reflow to fewer columns
-- Video content maintains aspect ratio
+| Width | Behavior |
+| --- | --- |
+| `<640px` | Single-column panels, compact controls, stacked metrics |
+| `640-1024px` | Two-column metric grids and simplified table columns |
+| `>1024px` | Full dashboard layout with sidebar and dense tables |
 
-## 9. Agent Prompt Guide
+Touch targets should remain at least 40px tall where possible. Dense tables can use compact row height, but row actions must remain easy to target.
 
-### Quick Color Reference
-- Background Dark: "Runway Black (#000000)"
-- Background Light: "Pure White (#ffffff)"
-- Primary Text Dark: "Charcoal (#404040)"
-- Secondary Text: "Cool Slate (#767d88)"
-- Muted Text: "Muted Gray (#a7a7a7)"
-- Light Border: "Cool Silver (#c9ccd1)"
-- Dark Border: "Border Dark (#27272a)"
-- Card Surface: "Dark Surface (#1a1a1a)"
+## 8. Accessibility And State
 
-### Example Component Prompts
-- "Create a cinematic hero section: full-bleed dark background with a cinematic image overlay. Headline at 48px abcNormal weight 400, line-height 1.0, letter-spacing -1.2px in white. Minimal text below in Cool Slate (#767d88) at 16px."
-- "Design a research article grid: one large card (50% width) with a cinematic image and 24px title, next to two smaller cards stacked. All images with 8px border-radius. Titles in white (dark bg) or Charcoal (#404040, light bg)."
-- "Build a section label: 14px abcNormal weight 500, uppercase, letter-spacing 0.35px in Cool Slate (#767d88). No border, no background."
-- "Create a trust bar: company logos in monochrome, horizontal layout with generous spacing. On dark background with white/gray logo treatments."
-- "Design a mission statement section: Runway Black background, white text at 36px abcNormal, line-height 1.0, letter-spacing -0.9px. Centered, with generous vertical padding."
+- Use visible focus rings on keyboard navigation.
+- Do not communicate scan status with color alone.
+- Keep contrast high on dark surfaces.
+- Use `aria-live` only for important status changes, not every progress tick.
+- Preserve user control during long scans with pause, resume, and cancel states where supported.
+- Loading skeletons should reserve the final layout size.
 
-### Iteration Guide
-1. Visual content first — always include cinematic photography
-2. Use abcNormal for everything — specify size and weight, never change the font
-3. Keep the interface invisible — no heavy borders, no shadows, no bright colors
-4. Use the cool slate grays (#767d88, #7d848e) for secondary text — not warm grays
-5. Uppercase labels need letter-spacing (0.35px) — never tight uppercase
-6. Dark sections should be truly dark (#000000 or #1a1a1a) — no medium grays as surfaces
+## 9. Implementation Notes
+
+- Tailwind tokens in `tailwind.config.js` are the source of truth for color and font families.
+- Shared component classes live in `src/index.css`.
+- Avoid custom one-off colors in React components unless a new token is intentionally added.
+- Prefer existing classes such as `cyber-btn`, `cyber-input`, `badge`, `task-card`, `data-table`, `page-heading`, and `editorial-panel`.
+- Keep border radius in the 4-8px range for routine UI.
+- Use shadows only for unavoidable platform or boot states; do not introduce decorative panel shadows.
+
+## 10. Agent Prompt Guide
+
+When asking an agent to build or revise Domain Scanner UI, provide product-specific context:
+
+- "Build a dense task dashboard for a desktop domain scanning app. Use dark panels, compact metrics, visible scan status, and stable progress rows."
+- "Create a task detail results table with domain, TLD, availability, RDAP/DNS evidence, confidence, and paginated controls."
+- "Design a proxy manager panel with health status, protocol, latency, last checked time, and safe destructive actions."
+- "Create an empty state for no vector index that directs the user to run vectorization before semantic filtering."
+- "Revise a settings form for GPU, embedding API, and LLM configuration using dark inputs, concise helper text, and visible validation states."
+
+Do not ask for external brand references, hero-led marketing pages, external wordmarks, unrelated mission statements, or photography-led layouts for this product.
