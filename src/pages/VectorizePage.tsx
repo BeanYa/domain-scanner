@@ -18,7 +18,7 @@ import { invokeCommand } from "../services/tauri";
 import ActionNotice, { type ActionNoticeState } from "../components/ActionNotice";
 import { useTaskLogs } from "../hooks/useTaskLogs";
 import { useVectorProgress } from "../hooks/useVectorProgress";
-import type { VectorRecord, VectorStats } from "../types";
+import type { TaskRun, VectorRecord, VectorStats } from "../types";
 
 type VectorLogType = "task" | "request";
 
@@ -32,7 +32,9 @@ const logColors: Record<string, string> = {
 const VECTOR_PAGE_SIZE = 50;
 
 export default function VectorizePage() {
-  const [selectedTask, setSelectedTask] = useState("");
+  const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([]);
+  const [activeTaskId, setActiveTaskId] = useState("");
+  const [latestRunsByTask, setLatestRunsByTask] = useState<Record<string, TaskRun | null>>({});
   const [isRunning, setIsRunning] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [stopLoading, setStopLoading] = useState(false);
@@ -56,28 +58,69 @@ export default function VectorizePage() {
     () => tasks.filter(t => t.status === "completed" && t.available_count > 0),
     [tasks]
   );
-  const selectedTaskInfo = completedTasks.find((task) => task.id === selectedTask);
-  const { progress, fetchProgress } = useVectorProgress(selectedTask || null);
+  const activeTaskInfo = completedTasks.find((task) => task.id === activeTaskId);
+  const { progress, fetchProgress } = useVectorProgress(activeTaskId || null);
   const { logs, loading: logsLoading } = useTaskLogs({
-    taskId: selectedTask,
+    taskId: activeTaskId,
     logType,
     pageSize: 100,
     autoRefresh: true,
-    enabled: Boolean(selectedTask),
+    enabled: Boolean(activeTaskId),
   });
 
   useEffect(() => {
     if (completedTasks.length === 0) {
-      setSelectedTask("");
+      setSelectedTaskIds([]);
+      setActiveTaskId("");
       return;
     }
-    setSelectedTask((current) =>
-      completedTasks.some((task) => task.id === current) ? current : completedTasks[0].id
-    );
+    setSelectedTaskIds((current) => {
+      const validIds = current.filter((id) => completedTasks.some((task) => task.id === id));
+      return validIds.length > 0 ? validIds : [completedTasks[0].id];
+    });
+  }, [completedTasks]);
+
+  useEffect(() => {
+    if (selectedTaskIds.length === 0) {
+      setActiveTaskId("");
+      return;
+    }
+    setActiveTaskId((current) => (selectedTaskIds.includes(current) ? current : selectedTaskIds[0]));
+  }, [selectedTaskIds]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchLatestRuns = async () => {
+      if (completedTasks.length === 0) {
+        setLatestRunsByTask({});
+        return;
+      }
+      const entries = await Promise.all(
+        completedTasks.map(async (task) => {
+          try {
+            const result = await invokeCommand<string>("list_task_runs", {
+              request: { task_id: task.id },
+            });
+            const runs = JSON.parse(result) as TaskRun[];
+            return [task.id, runs[0] ?? null] as const;
+          } catch (e) {
+            console.error("Failed to fetch task runs:", e);
+            return [task.id, null] as const;
+          }
+        })
+      );
+      if (!cancelled) {
+        setLatestRunsByTask(Object.fromEntries(entries));
+      }
+    };
+    fetchLatestRuns();
+    return () => {
+      cancelled = true;
+    };
   }, [completedTasks]);
 
   const fetchVectorData = async (page = vectorPage) => {
-    if (!selectedTask) {
+    if (!activeTaskId) {
       setVectorStats(null);
       setVectors([]);
       setVectorTotal(0);
@@ -86,9 +129,9 @@ export default function VectorizePage() {
     setVectorLoading(true);
     try {
       const [statsResult, listResult] = await Promise.all([
-        invokeCommand<string>("get_vector_stats", { request: { task_id: selectedTask } }),
+        invokeCommand<string>("get_vector_stats", { request: { task_id: activeTaskId } }),
         invokeCommand<string>("list_vectors", {
-          request: { task_id: selectedTask, limit: VECTOR_PAGE_SIZE, offset: page * VECTOR_PAGE_SIZE },
+          request: { task_id: activeTaskId, limit: VECTOR_PAGE_SIZE, offset: page * VECTOR_PAGE_SIZE },
         }),
       ]);
       const stats = JSON.parse(statsResult) as VectorStats;
@@ -105,11 +148,11 @@ export default function VectorizePage() {
 
   useEffect(() => {
     setVectorPage(0);
-  }, [selectedTask]);
+  }, [activeTaskId]);
 
   useEffect(() => {
     fetchVectorData();
-  }, [selectedTask, vectorPage]);
+  }, [activeTaskId, vectorPage]);
 
   useEffect(() => {
     if (progress?.status === "completed" || progress?.status === "failed" || progress?.status === "cancelled") {
@@ -123,36 +166,60 @@ export default function VectorizePage() {
     setNotice(nextNotice);
   };
 
+  const toggleTaskSelection = (taskId: string) => {
+    setSelectedTaskIds((current) => {
+      if (current.includes(taskId)) {
+        const next = current.filter((id) => id !== taskId);
+        return next;
+      }
+      return [...current, taskId];
+    });
+    setActiveTaskId(taskId);
+  };
+
   const handleVectorize = async () => {
-    if (!selectedTask) return;
+    if (selectedTaskIds.length === 0) return;
 
     setActionLoading(true);
     setIsRunning(true);
     showNotice("start", {
       tone: "running",
       title: "正在提交向量化任务",
-      message: `${selectedTaskInfo?.name ?? selectedTask} 正在调用 start_vectorize。`,
+      message: `正在提交 ${selectedTaskIds.length} 个已选任务结果。`,
     });
     try {
-      const result = await invokeCommand<string>("start_vectorize", {
-        request: {
-          task_id: selectedTask,
-          backend: "remote",
-          batch_size: 500,
-        },
-      });
+      const results = await Promise.allSettled(
+        selectedTaskIds.map((taskId) =>
+          invokeCommand<string>("start_vectorize", {
+            request: {
+              task_id: taskId,
+              backend: "remote",
+              batch_size: 500,
+            },
+          })
+        )
+      );
       await fetchProgress();
-      const response = JSON.parse(result) as {
-        skipped_existing: number;
-        pending: number;
-        total: number;
-        embedding_dim: number;
-      };
       await fetchVectorData();
+      const successes = results
+        .filter((result): result is PromiseFulfilledResult<string> => result.status === "fulfilled")
+        .map((result) => JSON.parse(result.value) as {
+          skipped_existing: number;
+          pending: number;
+          total: number;
+          embedding_dim: number;
+        });
+      const failures = results.filter((result) => result.status === "rejected") as PromiseRejectedResult[];
+      if (successes.length === 0) {
+        throw new Error(failures.map((failure) => String(failure.reason)).join("；") || "没有任务成功启动。");
+      }
+      const total = successes.reduce((sum, item) => sum + item.total, 0);
+      const pending = successes.reduce((sum, item) => sum + item.pending, 0);
+      const skipped = successes.reduce((sum, item) => sum + item.skipped_existing, 0);
       showNotice("start-success", {
-        tone: "running",
-        title: "向量化已在后台启动",
-        message: `总计 ${response.total} 条，待处理 ${response.pending} 条，已存在 ${response.skipped_existing} 条，维度 ${response.embedding_dim}。`,
+        tone: failures.length > 0 ? "warning" : "running",
+        title: failures.length > 0 ? "部分向量化任务已启动" : "向量化已在后台启动",
+        message: `已启动 ${successes.length}/${selectedTaskIds.length} 个任务；总计 ${total} 条，待处理 ${pending} 条，已存在 ${skipped} 条。${failures.length > 0 ? `失败 ${failures.length} 个。` : ""}`,
       });
     } catch (e) {
       showNotice("start-error", {
@@ -167,17 +234,25 @@ export default function VectorizePage() {
   };
 
   const handleStopVectorize = async () => {
-    if (!selectedTask) return;
+    if (selectedTaskIds.length === 0) return;
     setStopLoading(true);
     try {
-      const result = await invokeCommand<string>("stop_vectorize", {
-        request: { task_id: selectedTask },
-      });
-      const response = JSON.parse(result) as { cancelled: boolean };
+      const results = await Promise.allSettled(
+        selectedTaskIds.map((taskId) =>
+          invokeCommand<string>("stop_vectorize", {
+            request: { task_id: taskId },
+          })
+        )
+      );
+      const cancelledCount = results.reduce((count, result) => {
+        if (result.status !== "fulfilled") return count;
+        const response = JSON.parse(result.value) as { cancelled: boolean };
+        return response.cancelled ? count + 1 : count;
+      }, 0);
       showNotice("stop", {
-        tone: response.cancelled ? "info" : "error",
-        title: response.cancelled ? "已请求取消向量化" : "没有正在运行的向量化任务",
-        message: response.cancelled ? "后端会在当前 embedding 请求结束后停止写入后续批次。" : "当前任务没有可取消的向量化进程。",
+        tone: cancelledCount > 0 ? "info" : "error",
+        title: cancelledCount > 0 ? "已请求取消向量化" : "没有正在运行的向量化任务",
+        message: cancelledCount > 0 ? `已对 ${cancelledCount} 个任务发出取消请求，后端会在当前 embedding 请求结束后停止写入后续批次。` : "当前已选任务没有可取消的向量化进程。",
       });
     } catch (e) {
       showNotice("stop-error", {
@@ -229,12 +304,12 @@ export default function VectorizePage() {
   };
 
   const handleDeleteTaskVectors = async () => {
-    if (!selectedTask) return;
-    const ok = window.confirm("确认清空该任务的全部向量？清空后语义筛选需要重新向量化。");
+    if (!activeTaskId) return;
+    const ok = window.confirm("确认清空当前查看任务的全部向量？清空后语义筛选需要重新向量化。");
     if (!ok) return;
     setVectorActionId("all");
     try {
-      await invokeCommand("delete_task_vectors", { request: { task_id: selectedTask } });
+      await invokeCommand("delete_task_vectors", { request: { task_id: activeTaskId } });
       setVectorPage(0);
       await fetchProgress();
       await fetchVectorData();
@@ -256,7 +331,7 @@ export default function VectorizePage() {
     : gpuStatus.backend
     : "CPU";
   const gpuDeviceName = gpuStatus?.device_name || "CPU Only";
-  const total = progress?.total ?? selectedTaskInfo?.available_count ?? 0;
+  const total = progress?.total ?? activeTaskInfo?.available_count ?? 0;
   const processed = progress?.processed ?? 0;
   const percentage = progress?.percentage ?? 0;
   const progressMessage = progress?.message || getProgressStatusLabel(progress?.status, isRunning);
@@ -316,7 +391,36 @@ export default function VectorizePage() {
       </div>
 
       <div className="glass-panel p-5 space-y-4">
-        <h2 className="text-sm font-semibold text-cyber-text">选择源任务</h2>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-sm font-semibold text-cyber-text">选择任务结果</h2>
+            <p className="mt-1 text-xs text-cyber-muted-dim">
+              勾选多个任务结果后可一次性提交向量化；点击任务名称可切换下方进度、日志和向量库视图。
+            </p>
+          </div>
+          {completedTasks.length > 0 && (
+            <div className="flex shrink-0 items-center gap-2 text-xs">
+              <span className="text-cyber-muted-dim">已选 {selectedTaskIds.length}</span>
+              <button
+                type="button"
+                className="cyber-btn-secondary cyber-btn-sm"
+                onClick={() => {
+                  setSelectedTaskIds(completedTasks.map((task) => task.id));
+                  setActiveTaskId(completedTasks[0]?.id ?? "");
+                }}
+              >
+                全选
+              </button>
+              <button
+                type="button"
+                className="cyber-btn-secondary cyber-btn-sm"
+                onClick={() => setSelectedTaskIds([])}
+              >
+                清空
+              </button>
+            </div>
+          )}
+        </div>
         {completedTasks.length === 0 ? (
           <div className="text-center py-8 text-cyber-muted">
             <Inbox className="w-10 h-10 mx-auto mb-3 opacity-40" />
@@ -325,29 +429,55 @@ export default function VectorizePage() {
           </div>
         ) : (
           <div className="space-y-2">
-            {completedTasks.map((task) => (
-              <label
-                key={task.id}
-                className={`grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 overflow-hidden p-3 rounded-lg cursor-pointer transition-all ${
-                  selectedTask === task.id
-                    ? "bg-white/[0.06] border border-white/20"
-                    : "bg-cyber-bg/50 border border-cyber-border hover:border-cyber-border-light"
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="task"
-                  value={task.id}
-                  checked={selectedTask === task.id}
-                  onChange={(e) => setSelectedTask(e.target.value)}
-                  className="accent-cyber-green"
-                />
-                <span className="min-w-0 truncate text-sm text-cyber-text font-medium" title={task.name}>
-                  {task.name}
-                </span>
-                <span className="shrink-0 text-xs text-cyber-muted">{task.available_count} 个可用域名</span>
-              </label>
-            ))}
+            {completedTasks.map((task, index) => {
+              const checked = selectedTaskIds.includes(task.id);
+              const active = activeTaskId === task.id;
+              const latestRun = latestRunsByTask[task.id];
+              return (
+                <div
+                  key={task.id}
+                  className={`grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 overflow-hidden rounded-lg border p-3 transition-all ${
+                    active
+                      ? "border-white/25 bg-white/[0.07]"
+                      : checked
+                        ? "border-cyber-green/30 bg-cyber-green/[0.05]"
+                        : "border-cyber-border bg-cyber-bg/50 hover:border-cyber-border-light"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    aria-label={`选择 ${task.name}`}
+                    checked={checked}
+                    onChange={() => toggleTaskSelection(task.id)}
+                    className="h-4 w-4 accent-cyber-green"
+                  />
+                  <button
+                    type="button"
+                    className="min-w-0 text-left"
+                    onClick={() => setActiveTaskId(task.id)}
+                  >
+                    <span className="block truncate text-sm font-medium text-cyber-text" title={task.name}>
+                      {task.name}
+                    </span>
+                    <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-cyber-muted-dim">
+                      <span className="font-mono">
+                        {latestRun ? `Run #${latestRun.run_number}` : `Task #${index + 1}`}
+                      </span>
+                      <span>{formatDateTime(latestRun?.started_at ?? task.created_at)}</span>
+                      <span className="font-mono">{task.id.slice(0, 8)}</span>
+                    </span>
+                  </button>
+                  <div className="flex shrink-0 items-center gap-3">
+                    {active && (
+                      <span className="rounded border border-white/15 bg-white/[0.06] px-2 py-0.5 text-[11px] text-cyber-text-secondary">
+                        当前查看
+                      </span>
+                    )}
+                    <span className="text-xs text-cyber-muted">{task.available_count} 个可用域名</span>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
@@ -363,7 +493,7 @@ export default function VectorizePage() {
           )}
         </div>
 
-        {selectedTask ? (
+        {activeTaskId ? (
           <div className="space-y-3">
             <div className="h-2 rounded-sm bg-cyber-surface overflow-hidden">
               <div
@@ -411,7 +541,7 @@ export default function VectorizePage() {
             <button
               onClick={() => fetchVectorData()}
               className="cyber-btn-secondary cyber-btn-sm"
-              disabled={!selectedTask || vectorLoading}
+              disabled={!activeTaskId || vectorLoading}
             >
               <RefreshCcw className={`w-3.5 h-3.5 ${vectorLoading ? "animate-spin" : ""}`} />
               刷新
@@ -419,7 +549,7 @@ export default function VectorizePage() {
             <button
               onClick={handleDeleteTaskVectors}
               className="cyber-btn-secondary cyber-btn-sm text-cyber-red"
-              disabled={!selectedTask || isVectorizing || vectorStats?.vector_count === 0 || vectorActionId === "all"}
+              disabled={!activeTaskId || isVectorizing || vectorStats?.vector_count === 0 || vectorActionId === "all"}
             >
               <Trash2 className="w-3.5 h-3.5" />
               清空
@@ -427,7 +557,7 @@ export default function VectorizePage() {
           </div>
         </div>
 
-        {!selectedTask ? (
+        {!activeTaskId ? (
           <div className="text-center py-8 text-cyber-muted">
             <Database className="w-10 h-10 mx-auto mb-3 opacity-40" />
             <p className="text-sm">选择任务后查看向量库</p>
@@ -562,7 +692,7 @@ export default function VectorizePage() {
           </div>
         </div>
         <div className="bg-cyber-bg-elevated/80 max-h-56 overflow-y-auto font-mono text-xs leading-relaxed">
-          {!selectedTask ? (
+          {!activeTaskId ? (
             <div className="text-center py-8 text-cyber-muted">
               <Terminal className="w-8 h-8 mx-auto mb-2 opacity-30" />
               <p className="text-xs">选择任务后查看日志</p>
@@ -611,10 +741,10 @@ export default function VectorizePage() {
         <button
           onClick={handleVectorize}
           className="cyber-btn-primary flex items-center gap-2"
-          disabled={!selectedTask || actionLoading || isVectorizing}
+          disabled={selectedTaskIds.length === 0 || actionLoading || isVectorizing}
         >
           <Play className="w-4 h-4" />
-          {actionLoading || isVectorizing ? "向量化中..." : "开始向量化"}
+          {actionLoading || isVectorizing ? "向量化中..." : `开始向量化${selectedTaskIds.length > 1 ? ` (${selectedTaskIds.length})` : ""}`}
         </button>
       </div>
     </div>

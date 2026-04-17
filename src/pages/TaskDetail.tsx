@@ -88,6 +88,7 @@ export default function TaskDetail() {
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [liveProgress, setLiveProgress] = useState<ScanProgress | null>(null);
+  const [tldsExpanded, setTldsExpanded] = useState(false);
   const resultRefreshTimerRef = useRef<number | null>(null);
   const { tasks, fetchTasks, startTask, pauseTask, stopTask, updateTaskSettings, rerunTask, deleteTask } = useTaskStore();
   const { proxies, fetchProxies } = useProxyStore();
@@ -287,10 +288,19 @@ export default function TaskDetail() {
     () => results.length > 0 && results.every((item) => selectedResultIds.includes(item.id)),
     [results, selectedResultIds]
   );
+  const visibleTlds = useMemo(() => {
+    if (!task) return [];
+    return tldsExpanded || task.tlds.length <= 10 ? task.tlds : task.tlds.slice(0, 10);
+  }, [task, tldsExpanded]);
+  const hasHiddenTlds = (task?.tlds.length ?? 0) > 10;
 
   useEffect(() => {
     setSelectedResultIds((current) => current.filter((id) => results.some((item) => item.id === id)));
   }, [results]);
+
+  useEffect(() => {
+    setTldsExpanded(false);
+  }, [task?.id]);
 
   useEffect(() => {
     if (!task) return;
@@ -491,11 +501,26 @@ export default function TaskDetail() {
           <h1 className="truncate text-3xl font-normal leading-none text-cyber-text" title={task.name}>
             {task.name}
           </h1>
-          <div className="flex items-center gap-2 mt-1 flex-wrap">
-            {task.tlds.map((tld) => (
-              <span key={tld} className="badge-neutral">{tld}</span>
+          <div className="mt-2 text-xs text-cyber-muted-dim font-mono">ID: {id}</div>
+          <div
+            className={`mt-2 flex items-start gap-2 overflow-hidden transition-[height] duration-200 ${
+              tldsExpanded ? "min-h-[4.25rem] flex-wrap" : "h-[4.25rem] flex-wrap"
+            }`}
+          >
+            {visibleTlds.map((tld) => (
+              <span key={tld} className="badge-neutral shrink-0">{tld}</span>
             ))}
-            <span className="text-xs text-cyber-muted-dim font-mono">ID: {id}</span>
+            {hasHiddenTlds && (
+              <button
+                type="button"
+                className="badge-neutral inline-flex min-w-[6.5rem] shrink-0 items-center justify-center gap-1 hover:border-cyber-green/35 hover:text-cyber-text-secondary"
+                onClick={() => setTldsExpanded((expanded) => !expanded)}
+                aria-expanded={tldsExpanded}
+              >
+                {tldsExpanded ? "收起" : `展开 +${task.tlds.length - 10}`}
+                <ChevronDown className={`h-3 w-3 transition-transform ${tldsExpanded ? "rotate-180" : ""}`} />
+              </button>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
