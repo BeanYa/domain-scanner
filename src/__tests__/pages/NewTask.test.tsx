@@ -71,7 +71,7 @@ describe("NewTask proxy selection", () => {
   it("allows selecting an offline proxy and shows a warning", async () => {
     const user = userEvent.setup();
     render(
-      <MemoryRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <NewTask />
       </MemoryRouter>
     );
@@ -97,7 +97,7 @@ describe("NewTask proxy selection", () => {
   it("supports selecting an offline proxy with the keyboard", async () => {
     const user = userEvent.setup();
     render(
-      <MemoryRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <NewTask />
       </MemoryRouter>
     );
@@ -115,7 +115,7 @@ describe("NewTask proxy selection", () => {
   it("allows selecting an unchecked proxy", async () => {
     const user = userEvent.setup();
     render(
-      <MemoryRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <NewTask />
       </MemoryRouter>
     );

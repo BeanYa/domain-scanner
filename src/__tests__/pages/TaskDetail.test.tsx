@@ -117,7 +117,10 @@ describe("TaskDetail", () => {
     const { invokeCommand } = await import("../../services/tauri");
 
     render(
-      <MemoryRouter initialEntries={["/tasks/task-1"]}>
+      <MemoryRouter
+        initialEntries={["/tasks/task-1"]}
+        future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+      >
         <Routes>
           <Route path="/tasks/:id" element={<TaskDetail />} />
         </Routes>

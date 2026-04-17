@@ -97,7 +97,7 @@ describe("TaskList polling", () => {
     const { invokeCommand } = await import("../../services/tauri");
 
     render(
-      <MemoryRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <TaskList />
       </MemoryRouter>
     );
@@ -131,7 +131,7 @@ describe("TaskList polling", () => {
     const { invokeCommand } = await import("../../services/tauri");
 
     render(
-      <MemoryRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <TaskList />
       </MemoryRouter>
     );
@@ -165,7 +165,7 @@ describe("TaskList polling", () => {
     const { invokeCommand } = await import("../../services/tauri");
 
     render(
-      <MemoryRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <TaskList />
       </MemoryRouter>
     );
