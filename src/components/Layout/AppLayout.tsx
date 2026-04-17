@@ -6,29 +6,25 @@ export default function AppLayout() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   return (
-    <div className="min-h-screen bg-cyber-bg flex">
-      {/* Sidebar */}
+    <div className="min-h-screen overflow-x-hidden bg-cyber-bg">
       <Sidebar collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed(!sidebarCollapsed)} />
 
-      {/* Main Content Area */}
       <main
-        className={`flex-1 min-h-screen transition-all duration-300 ease-out ${
-          sidebarCollapsed ? "ml-[72px]" : "ml-[240px]"
+        className={`min-h-screen min-w-0 overflow-x-hidden transition-[margin,width] duration-300 ease-out ${
+          sidebarCollapsed
+            ? "ml-[72px] w-[calc(100vw-72px)]"
+            : "ml-[240px] w-[calc(100vw-240px)]"
         }`}
       >
-        {/* Top Bar */}
-        <header className="sticky top-0 z-30 h-14 border-b border-cyber-border/30 backdrop-blur-xl bg-cyber-bg/80">
-          <div className="h-full px-6 flex items-center justify-between">
+        <header className="sticky top-0 z-30 h-14 border-b border-cyber-border bg-black/95">
+          <div className="h-full min-w-0 px-6 flex items-center justify-between">
             <Breadcrumb />
-            <div className="flex items-center gap-3">
-              <TopBarActions />
-            </div>
+            <TopBarActions />
           </div>
         </header>
 
-        {/* Page Content with scrollable area */}
-        <div className="h-[calc(100vh-3.5rem)] overflow-y-auto">
-          <div className="p-6 max-w-[1440px] mx-auto">
+        <div className="h-[calc(100vh-3.5rem)] overflow-y-auto overflow-x-hidden">
+          <div className="w-full min-w-0 p-6 lg:p-8 max-w-[1600px] mx-auto">
             <Outlet />
           </div>
         </div>
@@ -61,11 +57,11 @@ function Breadcrumb() {
 
   return (
     <div className="flex items-center gap-2">
-      <span className="text-sm font-semibold text-cyber-text">{title}</span>
+      <span className="eyebrow text-cyber-text">{title}</span>
       {location.pathname !== "/dashboard" && (
         <>
           <span className="text-cyber-border-light text-xs">/</span>
-          <span className="text-xs text-cyber-muted">Domain Scanner</span>
+          <span className="eyebrow">Domain Scanner</span>
         </>
       )}
     </div>
@@ -76,10 +72,9 @@ function Breadcrumb() {
 function TopBarActions() {
   return (
     <div className="flex items-center gap-1">
-      {/* Status indicator */}
-      <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-cyber-green/8 border border-cyber-green/15">
+      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-cyber-border bg-cyber-bg-elevated">
         <span className="status-dot-running w-1.5 h-1.5" />
-        <span className="text-[11px] font-medium text-cyber-green">在线</span>
+        <span className="eyebrow text-cyber-text-secondary">在线</span>
       </div>
     </div>
   );

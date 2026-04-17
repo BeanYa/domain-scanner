@@ -1,6 +1,6 @@
 // Type definitions - placeholder, will be expanded by parallel agent
 
-export type TaskStatus = "pending" | "running" | "paused" | "completed";
+export type TaskStatus = "pending" | "running" | "paused" | "stopped" | "completed";
 
 export type ScanMode =
   | { type: "regex"; pattern: string }
@@ -81,17 +81,47 @@ export interface ProxyConfig {
   username: string | null;
   password: string | null;
   is_active: boolean;
+  status: "pending" | "checking" | "available" | "unavailable" | "error";
+  last_checked_at: string | null;
+  last_error: string | null;
+}
+
+export interface ProxyEndpointCheck {
+  key: string;
+  label: string;
+  url: string;
+  reachable: boolean;
+  http_status: number | null;
+  response_time_ms: number | null;
+  error_message: string | null;
+}
+
+export interface ProxyTestResult {
+  proxy_id: number;
+  success: boolean;
+  status: ProxyConfig["status"];
+  message: string;
+  checked_at: string;
+  reachable_count: number;
+  total_count: number;
+  endpoints: ProxyEndpointCheck[];
+  notes: string[];
 }
 
 export interface LlmConfig {
   id: string;
   name: string;
   base_url: string;
-  api_key: string;
-  model: string;
+  api_key?: string;
+  model?: string;
   embedding_model: string | null;
   embedding_dim: number;
   is_default: boolean;
+  is_template?: boolean;
+  region?: string;
+  category?: string;
+  vector_ready?: boolean;
+  notes?: string;
 }
 
 export interface BatchCreateResult {
@@ -112,6 +142,7 @@ export interface LogEntry {
   id: number;
   task_id: string;
   run_id: string | null;
+  log_type: "task" | "request";
   level: "debug" | "info" | "warn" | "error";
   message: string;
   created_at: string;
@@ -131,8 +162,53 @@ export interface TaskRun {
 }
 
 export interface VectorProgress {
+  run_id: string | null;
   task_id: string;
-  completed: number;
   total: number;
-  eta_seconds: number | null;
+  processed: number;
+  percentage: number;
+  backend: GpuBackend;
+  speed_per_sec: number | null;
+  estimated_remaining_secs: number | null;
+  status: "idle" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
+  message: string | null;
+  updated_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface VectorizeRun {
+  id: string;
+  task_id: string;
+  status: "running" | "completed" | "failed" | "cancelled" | "interrupted";
+  backend: string;
+  total_count: number;
+  processed_count: number;
+  skipped_existing: number;
+  batch_size: number;
+  embedding_dim: number;
+  error_message: string | null;
+  started_at: string;
+  updated_at: string;
+  finished_at: string | null;
+}
+
+export interface VectorStats {
+  task_id: string;
+  table_name: string;
+  embedding_dim: number;
+  total_available: number;
+  vector_count: number;
+  missing_count: number;
+  coverage: number;
+  running: boolean;
+  last_run: VectorizeRun | null;
+}
+
+export interface VectorRecord {
+  domain_id: number;
+  task_id: string;
+  domain: string;
+  tld: string;
+  vector_dim: number;
 }

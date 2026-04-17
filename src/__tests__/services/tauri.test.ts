@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { beforeEach, describe, it, expect, vi } from "vitest";
 
 // We test the tauri service by mocking the @tauri-apps/api/core module
 vi.mock("@tauri-apps/api/core", () => ({
@@ -10,6 +10,13 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 describe("tauri service", () => {
+  beforeEach(async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const { listen } = await import("@tauri-apps/api/event");
+    (invoke as ReturnType<typeof vi.fn>).mockReset();
+    (listen as ReturnType<typeof vi.fn>).mockReset();
+  });
+
   it("invokeCommand should call invoke with correct args", async () => {
     const { invoke } = await import("@tauri-apps/api/core");
     const { invokeCommand } = await import("../../services/tauri");
@@ -46,5 +53,16 @@ describe("tauri service", () => {
 
     expect(listen).toHaveBeenCalledWith("test-event", expect.any(Function));
     expect(unlisten).toBe(mockUnlisten);
+  });
+
+  it("invokeCommand should normalize missing Tauri runtime errors", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const { invokeCommand } = await import("../../services/tauri");
+
+    (invoke as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new TypeError("Cannot read properties of undefined (reading 'invoke')")
+    );
+
+    await expect(invokeCommand("list_tasks")).rejects.toThrow("当前页面没有连接到 Tauri 后端");
   });
 });

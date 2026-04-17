@@ -23,15 +23,19 @@ pub fn run() {
             let db_path = app_data_dir.join("domain-scanner.db");
             db::init::set_db_path(db_path.to_string_lossy().to_string());
             // Eagerly verify the database can be opened and initialized
-            db::init::open_db().expect("Failed to initialize database");
+            let conn = db::init::open_db().expect("Failed to initialize database");
+            let _ = db::vectorize_run_repo::VectorizeRunRepo::new(&conn).mark_running_interrupted();
             // Register the background task runner
             app.manage(scanner::task_runner::TaskRunner::new());
+            app.manage(vector_cmds::VectorizeRunner::new());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             task_cmds::create_tasks,
             task_cmds::start_task,
             task_cmds::pause_task,
+            task_cmds::stop_task,
+            task_cmds::update_task_settings,
             task_cmds::resume_task,
             task_cmds::rerun_task,
             task_cmds::delete_task,
@@ -39,6 +43,7 @@ pub fn run() {
             task_cmds::list_scan_items,
             task_cmds::list_task_runs,
             task_cmds::get_task_detail,
+            task_cmds::retry_scan_items,
             batch_cmds::list_batches,
             batch_cmds::batch_pause,
             batch_cmds::batch_resume,
@@ -57,7 +62,13 @@ pub fn run() {
             llm_cmds::test_llm_config,
             log_cmds::get_logs,
             vector_cmds::start_vectorize,
+            vector_cmds::stop_vectorize,
             vector_cmds::get_vectorize_progress,
+            vector_cmds::get_vector_stats,
+            vector_cmds::list_vectors,
+            vector_cmds::delete_vector,
+            vector_cmds::delete_task_vectors,
+            vector_cmds::revectorize_item,
             gpu_cmds::get_gpu_status,
             gpu_cmds::update_gpu_config,
         ])

@@ -3,12 +3,14 @@ use serde::{Deserialize, Serialize};
 /// Task status state machine:
 /// pending -> running -> paused -> running (resume)
 ///                  \-> completed
+///                  \-> stopped (restart only)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum TaskStatus {
     Pending,
     Running,
     Paused,
+    Stopped,
     Completed,
 }
 
@@ -17,8 +19,10 @@ impl TaskStatus {
         match (self, target) {
             (TaskStatus::Pending, TaskStatus::Running) => true,
             (TaskStatus::Running, TaskStatus::Paused) => true,
+            (TaskStatus::Running, TaskStatus::Stopped) => true,
             (TaskStatus::Running, TaskStatus::Completed) => true,
             (TaskStatus::Paused, TaskStatus::Running) => true,
+            (TaskStatus::Paused, TaskStatus::Stopped) => true,
             _ => false,
         }
     }
@@ -112,13 +116,16 @@ mod tests {
     fn test_task_status_transitions() {
         assert!(TaskStatus::Pending.can_transition_to(&TaskStatus::Running));
         assert!(TaskStatus::Running.can_transition_to(&TaskStatus::Paused));
+        assert!(TaskStatus::Running.can_transition_to(&TaskStatus::Stopped));
         assert!(TaskStatus::Running.can_transition_to(&TaskStatus::Completed));
         assert!(TaskStatus::Paused.can_transition_to(&TaskStatus::Running));
+        assert!(TaskStatus::Paused.can_transition_to(&TaskStatus::Stopped));
 
         assert!(!TaskStatus::Pending.can_transition_to(&TaskStatus::Completed));
         assert!(!TaskStatus::Pending.can_transition_to(&TaskStatus::Paused));
         assert!(!TaskStatus::Completed.can_transition_to(&TaskStatus::Running));
         assert!(!TaskStatus::Paused.can_transition_to(&TaskStatus::Completed));
+        assert!(!TaskStatus::Stopped.can_transition_to(&TaskStatus::Running));
     }
 
     #[test]

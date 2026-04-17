@@ -1,7 +1,13 @@
 use crate::db::init;
 use crate::db::proxy_repo::ProxyRepo;
-use crate::models::proxy::{ProxyConfig, ProxyType};
+use crate::models::proxy::{
+    ProxyConfig, ProxyEndpointCheck, ProxyStatus, ProxyTestResult, ProxyType,
+};
+use crate::proxy::manager::ProxyManager;
+use crate::scanner::domain_checker::DomainChecker;
+use reqwest::{Method, StatusCode};
 use serde::Deserialize;
+use std::time::{Duration, Instant};
 
 #[tauri::command]
 pub fn list_proxies(active_only: Option<bool>) -> Result<String, String> {
@@ -14,7 +20,7 @@ pub fn list_proxies(active_only: Option<bool>) -> Result<String, String> {
     serde_json::to_string(&proxies).map_err(|e| e.to_string())
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct CreateProxyRequest {
     pub name: Option<String>,
     pub url: String,
@@ -28,22 +34,7 @@ pub fn create_proxy(request: CreateProxyRequest) -> Result<String, String> {
     let conn = init::open_db().map_err(|e| e.to_string())?;
     let repo = ProxyRepo::new(&conn);
 
-    let proxy_type = match request.proxy_type.to_lowercase().as_str() {
-        "http" => ProxyType::Http,
-        "https" => ProxyType::Https,
-        "socks5" => ProxyType::Socks5,
-        _ => return Err(format!("Unsupported proxy type: {}", request.proxy_type)),
-    };
-
-    let proxy = ProxyConfig {
-        id: 0, // Auto-generated
-        name: request.name,
-        url: request.url,
-        proxy_type,
-        username: request.username,
-        password: request.password,
-        is_active: true,
-    };
+    let proxy = proxy_from_request(request)?;
 
     let id = repo.create(&proxy).map_err(|e| e.to_string())?;
     let created = repo
@@ -63,66 +54,219 @@ pub fn delete_proxy(proxy_id: i64) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn test_proxy(proxy_id: i64) -> Result<String, String> {
-    let conn = init::open_db().map_err(|e| e.to_string())?;
-    let repo = ProxyRepo::new(&conn);
-
-    let proxy = repo
-        .get_by_id(proxy_id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("Proxy not found: {}", proxy_id))?;
-
-    // Test proxy connectivity
-    let proxy_url = match &proxy.username {
-        Some(user) => {
-            let pass = proxy.password.as_deref().unwrap_or("");
-            format!(
-                "{}://{}:{}@{}",
-                proxy.proxy_type.to_url_scheme(),
-                user,
-                pass,
-                proxy
-                    .url
-                    .trim_start_matches(&format!("{}://", proxy.proxy_type.to_url_scheme()))
-            )
-        }
-        None => proxy.url.clone(),
+pub async fn test_proxy(proxy_id: i64) -> Result<String, String> {
+    let proxy = {
+        let conn = init::open_db().map_err(|e| e.to_string())?;
+        let repo = ProxyRepo::new(&conn);
+        let proxy = repo
+            .get_by_id(proxy_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Proxy not found: {}", proxy_id))?;
+        repo.update_health(proxy_id, &ProxyStatus::Checking, false, None, None)
+            .map_err(|e| e.to_string())?;
+        proxy
     };
 
-    // Attempt a test connection
-    let result = std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let client = reqwest::Client::builder()
-                .proxy(reqwest::Proxy::all(&proxy_url).map_err(|e| e.to_string())?)
-                .timeout(std::time::Duration::from_secs(10))
-                .build()
-                .map_err(|e| format!("Client build error: {}", e))?;
+    let result = run_proxy_checks(&proxy).await;
+    {
+        let conn = init::open_db().map_err(|e| e.to_string())?;
+        let repo = ProxyRepo::new(&conn);
+        repo.update_health(
+            proxy_id,
+            &result.status,
+            result.success,
+            Some(&result.checked_at),
+            if result.success {
+                None
+            } else {
+                Some(result.message.as_str())
+            },
+        )
+        .map_err(|e| e.to_string())?;
+    }
 
-            client
-                .get("https://httpbin.org/ip")
-                .send()
-                .await
-                .map_err(|e| format!("Proxy test failed: {}", e))?;
+    Ok(serde_json::to_string(&result).map_err(|e| e.to_string())?)
+}
 
-            Ok::<(), String>(())
-        })
+fn proxy_from_request(request: CreateProxyRequest) -> Result<ProxyConfig, String> {
+    let proxy_type = match request.proxy_type.to_lowercase().as_str() {
+        "http" => ProxyType::Http,
+        "https" => ProxyType::Https,
+        "socks5" => ProxyType::Socks5,
+        _ => return Err(format!("Unsupported proxy type: {}", request.proxy_type)),
+    };
+
+    let url = normalize_proxy_url(&request.url, &proxy_type);
+
+    Ok(ProxyConfig {
+        id: 0,
+        name: request.name,
+        url,
+        proxy_type,
+        username: request.username,
+        password: request.password,
+        is_active: false,
+        status: ProxyStatus::Pending,
+        last_checked_at: None,
+        last_error: None,
     })
-    .join()
-    .unwrap();
+}
 
-    match result {
-        Ok(()) => {
-            repo.set_active(proxy_id, true).map_err(|e| e.to_string())?;
-            Ok(
-                serde_json::json!({"success": true, "message": "Proxy connection successful"})
-                    .to_string(),
-            )
+fn normalize_proxy_url(url: &str, proxy_type: &ProxyType) -> String {
+    let trimmed = url.trim();
+    if trimmed.contains("://") {
+        trimmed.to_string()
+    } else {
+        format!("{}://{}", proxy_type.to_url_scheme(), trimmed)
+    }
+}
+
+async fn run_proxy_checks(proxy: &ProxyConfig) -> ProxyTestResult {
+    let checked_at = chrono::Utc::now().to_rfc3339();
+    let mut notes = vec![
+        "DNS fallback 使用系统解析器，不通过代理，因此本次仅检测 RDAP HTTP(S) 端点。".to_string(),
+    ];
+
+    let reqwest_proxy = match ProxyManager::build_reqwest_proxy(proxy) {
+        Ok(proxy) => proxy,
+        Err(err) => {
+            return ProxyTestResult {
+                proxy_id: proxy.id,
+                success: false,
+                status: ProxyStatus::Error,
+                message: err,
+                checked_at,
+                reachable_count: 0,
+                total_count: 0,
+                endpoints: Vec::new(),
+                notes,
+            };
         }
-        Err(e) => {
-            let _ = repo.set_active(proxy_id, false);
-            Ok(serde_json::json!({"success": false, "message": e}).to_string())
+    };
+
+    let client = match reqwest::Client::builder()
+        .proxy(reqwest_proxy)
+        .timeout(Duration::from_secs(10))
+        .build()
+    {
+        Ok(client) => client,
+        Err(err) => {
+            return ProxyTestResult {
+                proxy_id: proxy.id,
+                success: false,
+                status: ProxyStatus::Error,
+                message: format!("Failed to build proxy client: {}", err),
+                checked_at,
+                reachable_count: 0,
+                total_count: 0,
+                endpoints: Vec::new(),
+                notes,
+            };
         }
+    };
+
+    let mut endpoints = Vec::new();
+    for probe in DomainChecker::rdap_probe_endpoints() {
+        endpoints.push(run_endpoint_check(&client, &probe).await);
+    }
+
+    let reachable_count = endpoints.iter().filter(|item| item.reachable).count();
+    let total_count = endpoints.len();
+    let failed_labels: Vec<&str> = endpoints
+        .iter()
+        .filter(|item| !item.reachable)
+        .map(|item| item.label.as_str())
+        .collect();
+
+    if !failed_labels.is_empty() {
+        notes.push(format!("失败端点：{}", failed_labels.join(", ")));
+    }
+
+    let (success, status, message) = if total_count > 0 && reachable_count == total_count {
+        (
+            true,
+            ProxyStatus::Available,
+            "所有扫描 RDAP 端点均可通过该代理访问".to_string(),
+        )
+    } else if reachable_count == 0 {
+        (
+            false,
+            ProxyStatus::Error,
+            "所有扫描 RDAP 端点均不可达".to_string(),
+        )
+    } else {
+        (
+            false,
+            ProxyStatus::Unavailable,
+            format!(
+                "仅 {}/{} 个扫描 RDAP 端点可达，暂不标记为在线",
+                reachable_count, total_count
+            ),
+        )
+    };
+
+    ProxyTestResult {
+        proxy_id: proxy.id,
+        success,
+        status,
+        message,
+        checked_at,
+        reachable_count,
+        total_count,
+        endpoints,
+        notes,
+    }
+}
+
+async fn run_endpoint_check(
+    client: &reqwest::Client,
+    probe: &crate::scanner::domain_checker::RdapProbeEndpoint,
+) -> ProxyEndpointCheck {
+    let start = Instant::now();
+    match send_probe_request(client, probe.url).await {
+        Ok(status) => ProxyEndpointCheck {
+            key: probe.key.to_string(),
+            label: probe.label.to_string(),
+            url: probe.url.to_string(),
+            reachable: status != StatusCode::PROXY_AUTHENTICATION_REQUIRED,
+            http_status: Some(status.as_u16()),
+            response_time_ms: Some(start.elapsed().as_millis() as i64),
+            error_message: if status == StatusCode::PROXY_AUTHENTICATION_REQUIRED {
+                Some("Proxy authentication required (407)".to_string())
+            } else {
+                None
+            },
+        },
+        Err(err) => ProxyEndpointCheck {
+            key: probe.key.to_string(),
+            label: probe.label.to_string(),
+            url: probe.url.to_string(),
+            reachable: false,
+            http_status: None,
+            response_time_ms: Some(start.elapsed().as_millis() as i64),
+            error_message: Some(err),
+        },
+    }
+}
+
+async fn send_probe_request(client: &reqwest::Client, url: &str) -> Result<StatusCode, String> {
+    let head_response = client
+        .request(Method::HEAD, url)
+        .send()
+        .await
+        .map_err(|e| format!("HEAD request failed: {}", e))?;
+
+    if head_response.status() == StatusCode::METHOD_NOT_ALLOWED
+        || head_response.status() == StatusCode::NOT_IMPLEMENTED
+    {
+        let get_response = client
+            .request(Method::GET, url)
+            .send()
+            .await
+            .map_err(|e| format!("GET fallback failed: {}", e))?;
+        Ok(get_response.status())
+    } else {
+        Ok(head_response.status())
     }
 }
 
@@ -150,6 +294,8 @@ mod tests {
         let proxy: ProxyConfig = serde_json::from_str(&result).unwrap();
         assert_eq!(proxy.url, "http://127.0.0.1:8080");
         assert_eq!(proxy.proxy_type, ProxyType::Http);
+        assert_eq!(proxy.status, ProxyStatus::Pending);
+        assert!(!proxy.is_active);
     }
 
     #[test]

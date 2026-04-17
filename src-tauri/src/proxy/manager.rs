@@ -86,7 +86,7 @@ impl ProxyManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::proxy::ProxyType;
+    use crate::models::proxy::{ProxyStatus, ProxyType};
 
     fn make_proxy(id: i64, url: &str, active: bool) -> ProxyConfig {
         ProxyConfig {
@@ -97,6 +97,13 @@ mod tests {
             username: None,
             password: None,
             is_active: active,
+            status: if active {
+                ProxyStatus::Available
+            } else {
+                ProxyStatus::Pending
+            },
+            last_checked_at: None,
+            last_error: None,
         }
     }
 
@@ -159,6 +166,9 @@ mod tests {
             username: None,
             password: None,
             is_active: true,
+            status: ProxyStatus::Available,
+            last_checked_at: None,
+            last_error: None,
         };
         let result = ProxyManager::build_reqwest_proxy(&http_proxy);
         assert!(result.is_ok());

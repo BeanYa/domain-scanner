@@ -1,15 +1,16 @@
 import { create } from "zustand";
-import type { ProxyConfig } from "../types";
+import type { ProxyConfig, ProxyTestResult } from "../types";
 import { invokeCommand } from "../services/tauri";
 
 interface ProxyStore {
   proxies: ProxyConfig[];
   loading: boolean;
   error: string | null;
+  lastTestResult: ProxyTestResult | null;
 
   fetchProxies: (activeOnly?: boolean) => Promise<void>;
   createProxy: (proxy: { name?: string; url: string; proxy_type: string; username?: string; password?: string }) => Promise<void>;
-  testProxy: (proxyId: number) => Promise<boolean>;
+  testProxy: (proxyId: number) => Promise<ProxyTestResult | null>;
   deleteProxy: (proxyId: number) => Promise<void>;
 }
 
@@ -17,6 +18,7 @@ export const useProxyStore = create<ProxyStore>((set, get) => ({
   proxies: [],
   loading: false,
   error: null,
+  lastTestResult: null,
 
   fetchProxies: async (activeOnly?: boolean) => {
     set({ loading: true, error: null });
@@ -44,11 +46,25 @@ export const useProxyStore = create<ProxyStore>((set, get) => ({
   testProxy: async (proxyId: number) => {
     try {
       const result = await invokeCommand<string>("test_proxy", { proxy_id: proxyId });
-      const parsed = JSON.parse(result);
-      return parsed.success === true;
+      const parsed: ProxyTestResult = JSON.parse(result);
+      set((state) => ({
+        lastTestResult: parsed,
+        proxies: state.proxies.map((proxy) =>
+          proxy.id === proxyId
+            ? {
+                ...proxy,
+                is_active: parsed.success,
+                status: parsed.status,
+                last_checked_at: parsed.checked_at,
+                last_error: parsed.success ? null : parsed.message,
+              }
+            : proxy
+        ),
+      }));
+      return parsed;
     } catch (e) {
       set({ error: String(e) });
-      return false;
+      return null;
     }
   },
 

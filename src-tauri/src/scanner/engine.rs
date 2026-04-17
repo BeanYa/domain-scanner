@@ -1,6 +1,8 @@
+use crate::db::proxy_repo::ProxyRepo;
 use crate::db::scan_item_repo::ScanItemRepo;
 use crate::db::task_repo::TaskRepo;
 use crate::db::task_run_repo::TaskRunRepo;
+use crate::models::proxy::ProxyStatus;
 use crate::models::scan_item::{ScanItem, ScanItemStatus};
 use crate::models::task::TaskStatus;
 use crate::scanner::domain_checker::{CheckConfig, DomainChecker};
@@ -18,6 +20,7 @@ pub struct EngineConfig {
     pub request_delay_ms: u64,
     pub batch_write_size: usize,
     pub progress_report_interval_ms: u64,
+    pub proxy_error_pause_threshold: usize,
 }
 
 impl Default for EngineConfig {
@@ -27,6 +30,7 @@ impl Default for EngineConfig {
             request_delay_ms: 100,
             batch_write_size: 500,
             progress_report_interval_ms: 200,
+            proxy_error_pause_threshold: 10,
         }
     }
 }
@@ -41,6 +45,13 @@ pub struct ScanProgress {
     pub available_count: i64,
     pub error_count: i64,
     pub percent: f64,
+    pub pause_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancelIntent {
+    Pause,
+    Stop,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -79,6 +90,7 @@ impl ScanEngine {
         run_id: &str,
         conn: Arc<Mutex<rusqlite::Connection>>,
         cancel_token: tokio_util::sync::CancellationToken,
+        cancel_intent: Arc<Mutex<CancelIntent>>,
         app: &AppHandle,
     ) -> Result<ScanProgress, String> {
         // Get task info
@@ -118,14 +130,28 @@ impl ScanEngine {
             total_count,
             available_count,
             error_count,
+            None,
         );
         let _ = app.emit("scan-progress", &initial_progress);
 
         let mut inflight = FuturesUnordered::new();
         self.fill_inflight(&mut inflight, &mut generator);
+        let mut proxy_error_streak = 0usize;
 
         while let Some((candidate, result)) = inflight.next().await {
             if cancel_token.is_cancelled() {
+                let intent = cancel_intent
+                    .lock()
+                    .map(|guard| *guard)
+                    .unwrap_or(CancelIntent::Pause);
+                let status = match intent {
+                    CancelIntent::Pause => TaskStatus::Paused,
+                    CancelIntent::Stop => TaskStatus::Stopped,
+                };
+                let reason = match intent {
+                    CancelIntent::Pause => "manual_pause",
+                    CancelIntent::Stop => "manual_stop",
+                };
                 self.persist_progress_locked(
                     &conn,
                     task_id,
@@ -140,12 +166,12 @@ impl ScanEngine {
                 {
                     let c = conn.lock().map_err(|e| e.to_string())?;
                     let repo = TaskRepo::new(&c);
-                    repo.update_status(task_id, &TaskStatus::Paused)
-                        .map_err(|e| format!("Failed to pause: {}", e))?;
+                    repo.update_status(task_id, &status)
+                        .map_err(|e| format!("Failed to update cancelled task: {}", e))?;
                     let run_repo = TaskRunRepo::new(&c);
                     run_repo
-                        .update_status(run_id, &TaskStatus::Paused, false)
-                        .map_err(|e| format!("Failed to pause run: {}", e))?;
+                        .update_status(run_id, &status, intent == CancelIntent::Stop)
+                        .map_err(|e| format!("Failed to update cancelled run: {}", e))?;
                 }
                 return Ok(self.make_progress(
                     task_id,
@@ -154,11 +180,13 @@ impl ScanEngine {
                     total_count,
                     available_count,
                     error_count,
+                    Some(reason.to_string()),
                 ));
             }
 
             completed_count += 1;
-            match result.status {
+            let proxy_error = result.proxy_error;
+            match &result.status {
                 ScanItemStatus::Available => available_count += 1,
                 ScanItemStatus::Error => error_count += 1,
                 _ => {}
@@ -180,6 +208,41 @@ impl ScanEngine {
             };
 
             pending_items.push(item);
+
+            if proxy_error {
+                proxy_error_streak += 1;
+            } else {
+                proxy_error_streak = 0;
+            }
+
+            if self.should_pause_for_proxy_errors(proxy_error_streak) {
+                let reason = format!(
+                    "Paused after {} consecutive proxy-related request errors",
+                    proxy_error_streak
+                );
+                self.persist_progress_locked(
+                    &conn,
+                    task_id,
+                    run_id,
+                    completed_count,
+                    candidate.index + 1,
+                    available_count,
+                    error_count,
+                    &mut pending_items,
+                    app,
+                );
+                self.pause_for_proxy_errors_locked(&conn, task_id, run_id, task.proxy_id, &reason)?;
+                cancel_token.cancel();
+                return Ok(self.make_progress(
+                    task_id,
+                    run_id,
+                    completed_count,
+                    total_count,
+                    available_count,
+                    error_count,
+                    Some("proxy_error_threshold".to_string()),
+                ));
+            }
 
             if pending_items.len() >= self.config.batch_write_size.max(1)
                 || last_persist_at.elapsed()
@@ -211,6 +274,7 @@ impl ScanEngine {
                     total_count,
                     available_count,
                     error_count,
+                    None,
                 );
                 let _ = app.emit("scan-progress", &progress);
                 last_progress_emit = Instant::now();
@@ -255,7 +319,13 @@ impl ScanEngine {
             total_count,
             available_count,
             error_count,
+            None,
         ))
+    }
+
+    fn should_pause_for_proxy_errors(&self, proxy_error_streak: usize) -> bool {
+        self.config.proxy_error_pause_threshold > 0
+            && proxy_error_streak >= self.config.proxy_error_pause_threshold
     }
 
     fn fill_inflight(
@@ -335,6 +405,7 @@ impl ScanEngine {
         total_count: i64,
         available_count: i64,
         error_count: i64,
+        pause_reason: Option<String>,
     ) -> ScanProgress {
         let percent = if total_count > 0 {
             (completed_count as f64 / total_count as f64) * 100.0
@@ -349,7 +420,41 @@ impl ScanEngine {
             available_count,
             error_count,
             percent,
+            pause_reason,
         }
+    }
+
+    fn pause_for_proxy_errors_locked(
+        &self,
+        conn: &Mutex<rusqlite::Connection>,
+        task_id: &str,
+        run_id: &str,
+        proxy_id: Option<i64>,
+        reason: &str,
+    ) -> Result<(), String> {
+        let c = conn.lock().map_err(|e| e.to_string())?;
+        let repo = TaskRepo::new(&c);
+        repo.update_status(task_id, &TaskStatus::Paused)
+            .map_err(|e| format!("Failed to pause after proxy errors: {}", e))?;
+        let run_repo = TaskRunRepo::new(&c);
+        run_repo
+            .update_status(run_id, &TaskStatus::Paused, false)
+            .map_err(|e| format!("Failed to pause run after proxy errors: {}", e))?;
+
+        if let Some(proxy_id) = proxy_id {
+            let proxy_repo = ProxyRepo::new(&c);
+            proxy_repo
+                .update_health(
+                    proxy_id,
+                    &ProxyStatus::Error,
+                    false,
+                    Some(&chrono::Utc::now().to_rfc3339()),
+                    Some(reason),
+                )
+                .map_err(|e| format!("Failed to mark proxy as error: {}", e))?;
+        }
+
+        Ok(())
     }
 }
 
@@ -367,7 +472,7 @@ mod tests {
     #[test]
     fn test_scan_progress_calculation() {
         let engine = ScanEngine::with_default_config();
-        let progress = engine.make_progress("t1", "run1", 50, 100, 30, 2);
+        let progress = engine.make_progress("t1", "run1", 50, 100, 30, 2, None);
         assert_eq!(progress.completed_count, 50);
         assert_eq!(progress.total_count, 100);
         assert_eq!(progress.available_count, 30);
@@ -378,7 +483,7 @@ mod tests {
     #[test]
     fn test_scan_progress_zero_total() {
         let engine = ScanEngine::with_default_config();
-        let progress = engine.make_progress("t1", "run1", 0, 0, 0, 0);
+        let progress = engine.make_progress("t1", "run1", 0, 0, 0, 0, None);
         assert_eq!(progress.percent, 0.0);
     }
 }

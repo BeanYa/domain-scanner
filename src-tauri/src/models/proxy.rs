@@ -8,6 +8,16 @@ pub enum ProxyType {
     Socks5,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ProxyStatus {
+    Pending,
+    Checking,
+    Available,
+    Unavailable,
+    Error,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyConfig {
     pub id: i64,
@@ -17,6 +27,33 @@ pub struct ProxyConfig {
     pub username: Option<String>,
     pub password: Option<String>,
     pub is_active: bool,
+    pub status: ProxyStatus,
+    pub last_checked_at: Option<String>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProxyEndpointCheck {
+    pub key: String,
+    pub label: String,
+    pub url: String,
+    pub reachable: bool,
+    pub http_status: Option<u16>,
+    pub response_time_ms: Option<i64>,
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProxyTestResult {
+    pub proxy_id: i64,
+    pub success: bool,
+    pub status: ProxyStatus,
+    pub message: String,
+    pub checked_at: String,
+    pub reachable_count: usize,
+    pub total_count: usize,
+    pub endpoints: Vec<ProxyEndpointCheck>,
+    pub notes: Vec<String>,
 }
 
 impl ProxyType {
@@ -51,9 +88,13 @@ mod tests {
             username: None,
             password: None,
             is_active: true,
+            status: ProxyStatus::Available,
+            last_checked_at: Some("2026-04-16T00:00:00Z".to_string()),
+            last_error: None,
         };
         let json = serde_json::to_string(&proxy).unwrap();
         let deserialized: ProxyConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(proxy.url, deserialized.url);
+        assert_eq!(proxy.status, deserialized.status);
     }
 }

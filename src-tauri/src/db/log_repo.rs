@@ -4,11 +4,36 @@ use std::path::{Path, PathBuf};
 
 const MAX_LOG_BYTES: u64 = 10 * 1024 * 1024;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogType {
+    Task,
+    Request,
+}
+
+impl LogType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LogType::Task => "task",
+            LogType::Request => "request",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "task" => Some(LogType::Task),
+            "request" => Some(LogType::Request),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TaskLog {
     pub id: i64,
     pub task_id: String,
     pub run_id: Option<String>,
+    #[serde(default = "default_log_type")]
+    pub log_type: String,
     pub level: String,
     pub message: String,
     pub created_at: String,
@@ -30,16 +55,38 @@ impl<'a> LogRepo<'a> {
         level: &str,
         message: &str,
     ) -> Result<TaskLog, rusqlite::Error> {
+        self.create_entry_with_type(task_id, run_id, LogType::Task, level, message)
+    }
+
+    pub fn create_request_entry(
+        &self,
+        task_id: &str,
+        run_id: Option<&str>,
+        level: &str,
+        message: &str,
+    ) -> Result<TaskLog, rusqlite::Error> {
+        self.create_entry_with_type(task_id, run_id, LogType::Request, level, message)
+    }
+
+    pub fn create_entry_with_type(
+        &self,
+        task_id: &str,
+        run_id: Option<&str>,
+        log_type: LogType,
+        level: &str,
+        message: &str,
+    ) -> Result<TaskLog, rusqlite::Error> {
         let entry = TaskLog {
             id: next_log_id(),
             task_id: task_id.to_string(),
             run_id: run_id.map(|value| value.to_string()),
+            log_type: log_type.as_str().to_string(),
             level: level.to_string(),
             message: message.to_string(),
             created_at: chrono::Utc::now().to_rfc3339(),
         };
 
-        let path = self.log_file_path(task_id, run_id);
+        let path = self.log_file_path(task_id, run_id, log_type);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(io_to_rusqlite)?;
         }
@@ -88,11 +135,15 @@ impl<'a> LogRepo<'a> {
         &self,
         task_id: &str,
         run_id: Option<&str>,
+        log_type: Option<LogType>,
         level: Option<&str>,
         limit: i64,
         offset: i64,
     ) -> Result<Vec<TaskLog>, rusqlite::Error> {
-        let mut logs = self.read_logs(task_id, run_id)?;
+        let mut logs = self.read_logs(task_id, run_id, log_type)?;
+        if let Some(log_type) = log_type {
+            logs.retain(|entry| entry.log_type == log_type.as_str());
+        }
         if let Some(level) = level {
             logs.retain(|entry| entry.level == level);
         }
@@ -109,9 +160,13 @@ impl<'a> LogRepo<'a> {
         &self,
         task_id: &str,
         run_id: Option<&str>,
+        log_type: Option<LogType>,
         level: Option<&str>,
     ) -> Result<i64, rusqlite::Error> {
-        let mut logs = self.read_logs(task_id, run_id)?;
+        let mut logs = self.read_logs(task_id, run_id, log_type)?;
+        if let Some(log_type) = log_type {
+            logs.retain(|entry| entry.log_type == log_type.as_str());
+        }
         if let Some(level) = level {
             logs.retain(|entry| entry.level == level);
         }
@@ -133,8 +188,11 @@ impl<'a> LogRepo<'a> {
         &self,
         task_id: &str,
         run_id: Option<&str>,
+        log_type: Option<LogType>,
     ) -> Result<Vec<TaskLog>, rusqlite::Error> {
-        let paths = self.log_paths(task_id, run_id).map_err(io_to_rusqlite)?;
+        let paths = self
+            .log_paths(task_id, run_id, log_type)
+            .map_err(io_to_rusqlite)?;
         let mut logs = Vec::new();
         for path in paths {
             if !path.exists() {
@@ -189,10 +247,12 @@ impl<'a> LogRepo<'a> {
         }
     }
 
-    fn log_file_path(&self, task_id: &str, run_id: Option<&str>) -> PathBuf {
-        let filename = match run_id {
-            Some(run_id) => format!("run-{}.log", run_id),
-            None => "task.log".to_string(),
+    fn log_file_path(&self, task_id: &str, run_id: Option<&str>, log_type: LogType) -> PathBuf {
+        let filename = match (log_type, run_id) {
+            (LogType::Task, Some(run_id)) => format!("run-{}-task.log", run_id),
+            (LogType::Task, None) => "task.log".to_string(),
+            (LogType::Request, Some(run_id)) => format!("run-{}-request.log", run_id),
+            (LogType::Request, None) => "request.log".to_string(),
         };
         self.logs_root().join(task_id).join(filename)
     }
@@ -209,10 +269,31 @@ impl<'a> LogRepo<'a> {
         &self,
         task_id: &str,
         run_id: Option<&str>,
+        log_type: Option<LogType>,
     ) -> Result<Vec<PathBuf>, std::io::Error> {
         if let Some(run_id) = run_id {
-            let current = self.log_file_path(task_id, Some(run_id));
-            return Ok(vec![self.backup_path(&current), current]);
+            let mut paths = Vec::new();
+            match log_type {
+                Some(LogType::Task) => {
+                    self.push_log_with_backup(&mut paths, task_id, None, LogType::Task);
+                    self.push_log_with_backup(&mut paths, task_id, Some(run_id), LogType::Task);
+                }
+                Some(LogType::Request) => {
+                    self.push_log_with_backup(&mut paths, task_id, Some(run_id), LogType::Request);
+                }
+                None => {
+                    self.push_log_with_backup(&mut paths, task_id, None, LogType::Task);
+                    self.push_log_with_backup(&mut paths, task_id, Some(run_id), LogType::Task);
+                    self.push_log_with_backup(&mut paths, task_id, Some(run_id), LogType::Request);
+                    let legacy = self
+                        .logs_root()
+                        .join(task_id)
+                        .join(format!("run-{}.log", run_id));
+                    paths.push(self.backup_path(&legacy));
+                    paths.push(legacy);
+                }
+            }
+            return Ok(paths);
         }
 
         let task_dir = self.logs_root().join(task_id);
@@ -224,11 +305,50 @@ impl<'a> LogRepo<'a> {
         for entry in fs::read_dir(task_dir)? {
             let entry = entry?;
             let path = entry.path();
-            if path.is_file() {
+            if path.is_file() && path_matches_log_type(&path, log_type) {
                 paths.push(path);
             }
         }
         Ok(paths)
+    }
+
+    fn push_log_with_backup(
+        &self,
+        paths: &mut Vec<PathBuf>,
+        task_id: &str,
+        run_id: Option<&str>,
+        log_type: LogType,
+    ) {
+        let current = self.log_file_path(task_id, run_id, log_type);
+        paths.push(self.backup_path(&current));
+        paths.push(current);
+    }
+}
+
+fn default_log_type() -> String {
+    LogType::Task.as_str().to_string()
+}
+
+fn path_matches_log_type(path: &Path, log_type: Option<LogType>) -> bool {
+    let Some(log_type) = log_type else {
+        return true;
+    };
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    match log_type {
+        LogType::Task => {
+            name == "task.log"
+                || name == "task.log.1"
+                || name.ends_with("-task.log")
+                || name.ends_with("-task.log.1")
+        }
+        LogType::Request => {
+            name == "request.log"
+                || name == "request.log.1"
+                || name.ends_with("-request.log")
+                || name.ends_with("-request.log.1")
+        }
     }
 }
 
@@ -331,7 +451,11 @@ mod tests {
         ];
         let count = repo.batch_insert(&logs).unwrap();
         assert_eq!(count, 3);
-        assert_eq!(repo.count_by_task("task1", Some("run1"), None).unwrap(), 3);
+        assert_eq!(
+            repo.count_by_task("task1", Some("run1"), None, None)
+                .unwrap(),
+            3
+        );
     }
 
     #[test]
@@ -346,7 +470,7 @@ mod tests {
         ])
         .unwrap();
         let logs = repo
-            .list_by_task("task1", Some("run1"), None, 100, 0)
+            .list_by_task("task1", Some("run1"), None, None, 100, 0)
             .unwrap();
         assert_eq!(logs.len(), 3);
     }
@@ -363,7 +487,7 @@ mod tests {
         ])
         .unwrap();
         let errors = repo
-            .list_by_task("task1", Some("run1"), Some("error"), 100, 0)
+            .list_by_task("task1", Some("run1"), None, Some("error"), 100, 0)
             .unwrap();
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].level, "error");
@@ -379,13 +503,36 @@ mod tests {
                 .unwrap();
         }
         let page1 = repo
-            .list_by_task("task1", Some("run1"), None, 3, 0)
+            .list_by_task("task1", Some("run1"), None, None, 3, 0)
             .unwrap();
         let page2 = repo
-            .list_by_task("task1", Some("run1"), None, 3, 3)
+            .list_by_task("task1", Some("run1"), None, None, 3, 3)
             .unwrap();
         assert_eq!(page1.len(), 3);
         assert_eq!(page2.len(), 3);
+    }
+
+    #[test]
+    fn test_list_logs_by_type() {
+        let (conn, _temp) = setup();
+        create_test_task(&conn);
+        let repo = LogRepo::new(&conn);
+        repo.create_entry("task1", Some("run1"), "info", "Task started")
+            .unwrap();
+        repo.create_request_entry("task1", Some("run1"), "info", "RDAP request via direct")
+            .unwrap();
+
+        let task_logs = repo
+            .list_by_task("task1", Some("run1"), Some(LogType::Task), None, 100, 0)
+            .unwrap();
+        let request_logs = repo
+            .list_by_task("task1", Some("run1"), Some(LogType::Request), None, 100, 0)
+            .unwrap();
+
+        assert_eq!(task_logs.len(), 1);
+        assert_eq!(task_logs[0].log_type, "task");
+        assert_eq!(request_logs.len(), 1);
+        assert_eq!(request_logs[0].log_type, "request");
     }
 
     #[test]
@@ -399,14 +546,18 @@ mod tests {
             ("task1", Some("run1"), "error", "Msg 3"),
         ])
         .unwrap();
-        assert_eq!(repo.count_by_task("task1", Some("run1"), None).unwrap(), 3);
         assert_eq!(
-            repo.count_by_task("task1", Some("run1"), Some("info"))
+            repo.count_by_task("task1", Some("run1"), None, None)
+                .unwrap(),
+            3
+        );
+        assert_eq!(
+            repo.count_by_task("task1", Some("run1"), None, Some("info"))
                 .unwrap(),
             2
         );
         assert_eq!(
-            repo.count_by_task("task1", Some("run1"), Some("error"))
+            repo.count_by_task("task1", Some("run1"), None, Some("error"))
                 .unwrap(),
             1
         );
@@ -423,6 +574,10 @@ mod tests {
         ])
         .unwrap();
         repo.delete_by_task("task1").unwrap();
-        assert_eq!(repo.count_by_task("task1", Some("run1"), None).unwrap(), 0);
+        assert_eq!(
+            repo.count_by_task("task1", Some("run1"), None, None)
+                .unwrap(),
+            0
+        );
     }
 }

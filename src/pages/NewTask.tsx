@@ -1,6 +1,8 @@
 import { useState, useEffect, Fragment } from "react";
 import { Zap, Regex, Type, Brain, List, ChevronRight, CheckCircle, AlertTriangle, Sparkles, Globe, Search, Settings, Shield, Gauge } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { ProxySelect } from "../components/ProxySelect";
+import { proxyStatusLabels } from "../components/ProxyStatusBadge";
 import { TLD_LIST, POPULAR_TLDS, TLDS_BY_CATEGORY, type TldCategory } from "../data/tlds";
 import { useTaskStore } from "../store/taskStore";
 import { useProxyStore } from "../store/proxyStore";
@@ -121,10 +123,10 @@ export default function NewTask() {
     return (
       <div className="flex items-center justify-center min-h-[70vh] animate-fade-in">
         <div className="text-center space-y-5 scale-in max-w-sm">
-          <div className="w-20 h-20 mx-auto rounded-2xl bg-cyber-green/10 border border-cyber-green/20 flex items-center justify-center shadow-neon">
+          <div className="w-20 h-20 mx-auto rounded-lg bg-white/[0.04] border border-white/12 flex items-center justify-center">
             <CheckCircle className="w-10 h-10 text-cyber-green" />
           </div>
-          <h2 className="text-xl font-bold text-cyber-text">任务创建成功</h2>
+          <h2 className="text-xl font-normal text-cyber-text">任务创建成功</h2>
           <p className="text-sm text-cyber-muted leading-relaxed">
             已创建 <span className="text-cyber-green font-semibold">1 个任务</span>，
             覆盖 <span className="text-cyber-blue font-semibold">{selectedTlds.length} 个 TLD 后缀</span>
@@ -144,22 +146,25 @@ export default function NewTask() {
     return TLD_LIST.map((t) => t.tld);
   };
   const visibleTlds = getVisibleTlds();
+  const selectedProxy = selectedProxyId
+    ? proxies.find((proxy) => proxy.id === selectedProxyId)
+    : undefined;
+  const selectedProxyNeedsAttention = Boolean(selectedProxy && selectedProxy.status !== "available");
 
   return (
-    <div className="space-y-6 max-w-4xl animate-fade-in">
-      {/* Header */}
+    <div className="page-shell max-w-4xl">
       <div>
-        <h1 className="text-2xl font-bold neon-text tracking-tight">新建扫描任务</h1>
-        <p className="text-sm text-cyber-muted mt-1">配置扫描参数，支持多前缀 x 多后缀笛卡尔积组合</p>
+        <div className="eyebrow mb-3">NEW SCAN</div>
+        <h1 className="page-heading">新建扫描任务</h1>
+        <p className="page-subtitle">配置扫描参数，支持多前缀 x 多后缀笛卡尔积组合。</p>
       </div>
 
-      {/* Step Indicator */}
       <div className="flex items-center gap-3 px-1">
         {[1, 2, 3].map((step) => (
           <Fragment key={step}>
-            {step > 1 && <div className={`h-[2px] flex-1 rounded-full ${step <= 3 ? "bg-cyber-green/30" : "bg-cyber-border/40"}`} />}
-            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
-              step <= 3 ? "bg-cyber-green/10 text-cyber-green border border-cyber-green/20" : "bg-cyber-surface text-cyber-muted-dim"
+            {step > 1 && <div className="h-px flex-1 bg-cyber-border" />}
+            <div className={`flex items-center gap-2 px-3 py-1.5 rounded text-xs font-medium transition-colors ${
+              step <= 3 ? "bg-white/[0.04] text-cyber-text-secondary border border-white/12" : "bg-cyber-surface text-cyber-muted-dim"
             }`}>
               步骤 {step}
             </div>
@@ -167,7 +172,6 @@ export default function NewTask() {
         ))}
       </div>
 
-      {/* Task Name Card */}
       <section className="glass-panel p-5 space-y-3">
         <label className="flex items-center gap-2 text-sm font-semibold text-cyber-text">
           <Sparkles className="w-4 h-4 text-cyber-orange" />
@@ -188,20 +192,19 @@ export default function NewTask() {
         )}
       </section>
 
-      {/* Scan Mode Card */}
       <section className="glass-panel p-5 space-y-4">
         <label className="block text-sm font-semibold text-cyber-text">扫描模式</label>
 
-        <div className="grid grid-cols-3 gap-2 p-1 bg-cyber-bg-elevated rounded-xl border border-cyber-border/30">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 p-1 bg-cyber-bg-elevated rounded-md border border-cyber-border">
           {tabs.map((tab) => (
             <button
               key={tab.key}
               onClick={() => setActiveTab(tab.key)}
               className={`
-                relative flex flex-col items-center gap-1.5 px-3 py-3 rounded-lg text-sm transition-all duration-200
+                relative flex flex-col items-center gap-1.5 px-3 py-3 rounded text-sm transition-colors duration-150
                 ${activeTab === tab.key
-                  ? "bg-gradient-to-b from-cyber-green/15 to-cyber-green/5 text-cyber-green border border-cyber-green/25 shadow-neon"
-                  : "text-cyber-muted hover:text-cyber-text-secondary hover:bg-cyber-card/50 border border-transparent"
+                  ? "bg-white/[0.06] text-white border border-white/15"
+                  : "text-cyber-muted hover:text-cyber-text-secondary hover:bg-cyber-card border border-transparent"
                 }
               `}
             >
@@ -225,7 +228,7 @@ export default function NewTask() {
                   className="cyber-input w-full font-mono text-sm"
                 />
               </div>
-              <div className="flex items-start gap-2 text-xs text-cyber-muted-dim bg-cyber-bg-elevated/60 p-3 rounded-lg border border-cyber-border/20">
+              <div className="flex items-start gap-2 text-xs text-cyber-muted-dim bg-cyber-surface p-3 rounded-md border border-cyber-border">
                 <Type className="w-3.5 h-3.5 mt-0.5 shrink-0 text-cyber-muted-dim/60" />
                 <span>通配符 <code className="font-mono text-cyber-orange">?</code> 等同于正则 <code className="font-mono text-cyber-orange">.</code>，
                   <code className="font-mono text-cyber-orange">*</code> 等同于 <code className="font-mono text-cyber-orange">.*</code></span>
@@ -241,7 +244,7 @@ export default function NewTask() {
                 onChange={(e) => setLlmPrompt(e.target.value)}
                 className="cyber-input w-full h-28 resize-none text-sm leading-relaxed"
               />
-              <div className="flex items-start gap-2 text-xs text-cyber-muted-dim bg-cyber-bg-elevated/60 p-3 rounded-lg border border-cyber-border/20">
+              <div className="flex items-start gap-2 text-xs text-cyber-muted-dim bg-cyber-surface p-3 rounded-md border border-cyber-border">
                 <Brain className="w-3.5 h-3.5 mt-0.5 shrink-0 text-cyber-purple/60" />
                 <span>LLM 将根据你的描述智能生成候选域名前缀，支持中文描述</span>
               </div>
@@ -266,7 +269,6 @@ export default function NewTask() {
         </div>
       </section>
 
-      {/* TLD Selector Card */}
       <section className="glass-panel p-5 space-y-4">
         <div className="flex items-center justify-between">
           <label className="flex items-center gap-2 text-sm font-semibold text-cyber-text">
@@ -299,16 +301,16 @@ export default function NewTask() {
             />
           </div>
           {!tldSearch && (
-            <div className="flex bg-cyber-surface rounded-lg p-0.5 text-xs border border-cyber-border/30">
+            <div className="flex bg-cyber-surface rounded-md p-0.5 text-xs border border-cyber-border">
               <button
                 onClick={() => setTldView("popular")}
-                className={`px-3 py-1.5 rounded-md transition-all ${tldView === "popular" ? "bg-cyber-green/15 text-cyber-green" : "text-cyber-muted-dim hover:text-cyber-text"}`}
+                className={`px-3 py-1.5 rounded transition-colors ${tldView === "popular" ? "bg-white/[0.08] text-white" : "text-cyber-muted-dim hover:text-cyber-text"}`}
               >
                 热门
               </button>
               <button
                 onClick={() => setTldView("category")}
-                className={`px-3 py-1.5 rounded-md transition-all ${tldView === "category" ? "bg-cyber-green/15 text-cyber-green" : "text-cyber-muted-dim hover:text-cyber-text"}`}
+                className={`px-3 py-1.5 rounded transition-colors ${tldView === "category" ? "bg-white/[0.08] text-white" : "text-cyber-muted-dim hover:text-cyber-text"}`}
               >
                 按分类
               </button>
@@ -371,7 +373,7 @@ export default function NewTask() {
 
         {/* Cartesian product info */}
         {selectedTlds.length > 1 && totalEstimate > 0 && (
-          <div className="flex items-start gap-2.5 p-3.5 rounded-xl bg-cyber-blue/[0.04] border border-cyber-blue/18">
+          <div className="flex items-start gap-2.5 p-3.5 rounded-md bg-white/[0.03] border border-white/10">
             <AlertTriangle className="w-4 h-4 text-cyber-blue/80 shrink-0 mt-0.5" />
             <div>
               <p className="text-sm text-cyber-blue">
@@ -386,7 +388,6 @@ export default function NewTask() {
         )}
       </section>
 
-      {/* Advanced Settings */}
       <section className="glass-panel overflow-hidden">
         <div
           className="px-5 py-4 flex items-center justify-between cursor-pointer hover:bg-cyber-card/20 transition-colors"
@@ -403,21 +404,29 @@ export default function NewTask() {
               <label className="flex items-center gap-2 text-xs text-cyber-muted mb-2">
                 <Shield className="w-3.5 h-3.5" /> 代理选择
               </label>
-              <select
-                className="cyber-input w-full text-sm"
-                value={selectedProxyId ?? ""}
-                onChange={(e) => setSelectedProxyId(e.target.value ? Number(e.target.value) : undefined)}
-              >
-                <option value="">不使用代理（直连）</option>
-                {proxies.filter(p => p.is_active).map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name || p.url} ({p.proxy_type.toUpperCase()})
-                    {p.username ? ` [${p.username}]` : ""}
-                  </option>
-                ))}
-              </select>
-              {proxies.filter(p => p.is_active).length === 0 && (
-                <p className="text-[10px] text-cyber-muted-dim mt-1.5">暂无可用代理，前往「代理管理」添加</p>
+              <ProxySelect
+                proxies={proxies}
+                selectedProxyId={selectedProxyId}
+                onChange={setSelectedProxyId}
+                hasWarning={selectedProxyNeedsAttention}
+              />
+              {selectedProxyNeedsAttention && selectedProxy ? (
+                <div className="mt-2 flex items-start gap-2 rounded-md border border-cyber-orange/25 bg-cyber-orange/[0.06] px-3 py-2 text-[11px] text-cyber-orange">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span>
+                    已选择 {proxyStatusLabels[selectedProxy.status]} 代理；任务仍会使用它连接，失败时请回到代理管理重新检测。
+                  </span>
+                </div>
+              ) : proxies.length === 0 ? (
+                <p className="text-[10px] text-cyber-muted-dim mt-1.5">暂无代理，前往「代理管理」添加</p>
+              ) : proxies.every((p) => p.status !== "available") ? (
+                <p className="text-[10px] text-cyber-orange mt-1.5">
+                  当前没有检测通过的代理；仍可选择离线或错误代理，任务运行时会按所选代理尝试连接。
+                </p>
+              ) : (
+                <p className="text-[10px] text-cyber-muted-dim mt-1.5">
+                  离线或错误代理会在选项后标注，仍可被选择用于重试。
+                </p>
               )}
             </div>
             <div className="pt-4">
@@ -449,8 +458,7 @@ export default function NewTask() {
         )}
       </section>
 
-      {/* Submit Bar */}
-      <div className="glass-panel p-5 flex items-center justify-between sticky bottom-6">
+      <div className="glass-panel p-5 flex items-center justify-between sticky bottom-6 bg-black">
         <div className="space-y-0.5">
           <p className="text-sm text-cyber-text-secondary">
             将创建 <strong className="text-cyber-green">1</strong> 个任务 · 覆盖{" "}
@@ -469,7 +477,7 @@ export default function NewTask() {
           <button
             onClick={handleCreate}
             disabled={creating || selectedTlds.length === 0 || (activeTab === "regex" && !pattern)}
-            className="cyber-btn-primary cyber-btn-lg disabled:opacity-40 disabled:hover:translate-y-0 disabled:hover:shadow-none"
+            className="cyber-btn-primary cyber-btn-lg disabled:opacity-40"
           >
             <Zap className="w-4.5 h-4.5" />
             {creating ? "创建中..." : "创建并启动"}
@@ -488,10 +496,10 @@ function TldButton({ tld, selected, onClick, highlight, compact }: {
     <button
       onClick={onClick}
       className={`
-        relative rounded-lg border text-center transition-all duration-150
+        relative rounded-md border text-center transition-colors duration-150
         ${compact ? "px-2 py-1.5 text-xs" : "px-3 py-2.5 text-sm font-semibold"}
         ${selected
-          ? "bg-cyber-green/[0.08] border-cyber-green/35 text-cyber-green shadow-neon"
+          ? "bg-white/[0.08] border-white/25 text-white"
           : highlight
             ? "bg-cyber-surface border-cyber-border/30 text-cyber-text-secondary hover:border-cyber-border-light"
             : "bg-cyber-surface/50 border-cyber-border/20 text-cyber-muted hover:border-cyber-border-light hover:text-cyber-text-secondary"
@@ -500,8 +508,8 @@ function TldButton({ tld, selected, onClick, highlight, compact }: {
     >
       {tld}
       {selected && (
-        <span className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-cyber-green flex items-center justify-center">
-          <CheckCircle className="w-2.5 h-2.5 text-white" />
+        <span className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded bg-white flex items-center justify-center">
+          <CheckCircle className="w-2.5 h-2.5 text-black" />
         </span>
       )}
     </button>

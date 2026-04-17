@@ -1,13 +1,18 @@
 use crate::db::filter_repo::FilterRepo;
 use crate::db::init;
 use crate::db::log_repo::LogRepo;
+use crate::db::proxy_repo::ProxyRepo;
 use crate::db::scan_item_repo::ScanItemRepo;
 use crate::db::task_repo::TaskRepo;
 use crate::db::task_run_repo::TaskRunRepo;
 use crate::models::scan_item::ScanItemStatus;
 use crate::models::task::{ScanMode, Task, TaskRun, TaskStatus};
+use crate::proxy::manager::ProxyManager;
+use crate::scanner::domain_checker::{CheckConfig, DomainChecker};
 use crate::scanner::signature::generate_signature;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tauri::Emitter;
 use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
@@ -135,6 +140,76 @@ pub fn pause_task(
 }
 
 #[tauri::command]
+pub fn stop_task(
+    task_id: String,
+    app: tauri::AppHandle,
+    runner: tauri::State<'_, crate::scanner::task_runner::TaskRunner>,
+) -> Result<(), String> {
+    runner.stop(&task_id, Some(&app))
+}
+
+#[tauri::command]
+pub fn update_task_settings(
+    request: UpdateTaskSettingsRequest,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    let concurrency = request.concurrency.clamp(1, 500);
+    let conn = init::open_db().map_err(|e| e.to_string())?;
+    let task_repo = TaskRepo::new(&conn);
+    let proxy_repo = ProxyRepo::new(&conn);
+    let task = task_repo
+        .get_by_id(&request.task_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Task not found: {}", request.task_id))?;
+
+    if !matches!(task.status, TaskStatus::Pending | TaskStatus::Paused) {
+        return Err("仅未启动或已暂停的任务可以修改并发量和代理设置。".to_string());
+    }
+
+    if let Some(proxy_id) = request.proxy_id {
+        proxy_repo
+            .get_by_id(proxy_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Proxy not found: {}", proxy_id))?;
+    }
+
+    task_repo
+        .update_settings(&task.id, concurrency, request.proxy_id)
+        .map_err(|e| e.to_string())?;
+
+    let updated = task_repo
+        .get_by_id(&task.id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Task not found after update: {}", task.id))?;
+
+    let mut changes = Vec::new();
+    if task.concurrency != updated.concurrency {
+        changes.push(format!(
+            "并发 {} -> {}",
+            task.concurrency, updated.concurrency
+        ));
+    }
+    if task.proxy_id != updated.proxy_id {
+        let old_proxy = describe_proxy_id_label(&proxy_repo, task.proxy_id)?;
+        let new_proxy = describe_proxy_id_label(&proxy_repo, updated.proxy_id)?;
+        changes.push(format!("代理 {} -> {}", old_proxy, new_proxy));
+    }
+
+    if !changes.is_empty() {
+        write_task_log_and_emit(
+            &conn,
+            Some(&app),
+            &task.id,
+            None,
+            "info",
+            &format!("任务设置已修改：{}", changes.join("；")),
+        );
+    }
+
+    serde_json::to_string(&updated).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn resume_task(
     task_id: String,
     app: tauri::AppHandle,
@@ -203,12 +278,42 @@ pub struct ListTaskRunsRequest {
     pub task_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct RetryScanItemsRequest {
+    pub task_id: String,
+    pub run_id: Option<String>,
+    pub item_ids: Vec<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateTaskSettingsRequest {
+    pub task_id: String,
+    pub concurrency: i64,
+    pub proxy_id: Option<i64>,
+}
+
 #[derive(Debug, Serialize)]
 struct PaginatedResponse<T> {
     items: Vec<T>,
     total: i64,
     page: i64,
     per_page: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RetryScanItemsResponse {
+    pub updated_count: usize,
+    pub available_count: i64,
+    pub error_count: i64,
+    pub run_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ScanResultsUpdatedEvent {
+    task_id: String,
+    run_id: String,
+    flushed_count: usize,
+    completed_count: i64,
 }
 
 #[tauri::command]
@@ -307,6 +412,306 @@ pub fn get_task_detail(task_id: String) -> Result<String, String> {
         .ok_or_else(|| format!("Task not found: {}", task_id))?;
 
     serde_json::to_string(&task).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn retry_scan_items(
+    request: RetryScanItemsRequest,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    if request.item_ids.is_empty() {
+        return Err("No scan items selected for retry".to_string());
+    }
+
+    let mut updated_count = 0usize;
+    let mut selected_ids = request.item_ids;
+    selected_ids.sort_unstable();
+    selected_ids.dedup();
+
+    let (task, run, items_to_retry, checker) = {
+        let conn = init::open_db().map_err(|e| e.to_string())?;
+        let task_repo = TaskRepo::new(&conn);
+        let run_repo = TaskRunRepo::new(&conn);
+        let scan_repo = ScanItemRepo::new(&conn);
+
+        let task = task_repo
+            .get_by_id(&request.task_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Task not found: {}", request.task_id))?;
+
+        let run = match request.run_id.as_deref() {
+            Some(run_id) => run_repo
+                .get_by_id(run_id)
+                .map_err(|e| e.to_string())?
+                .filter(|run| run.task_id == request.task_id)
+                .ok_or_else(|| format!("Run not found: {}", run_id))?,
+            None => run_repo
+                .get_latest_by_task(&request.task_id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("No runs found for task {}", request.task_id))?,
+        };
+
+        let mut items_to_retry = Vec::new();
+        for item_id in &selected_ids {
+            let Some(item) = scan_repo.get_by_id(*item_id).map_err(|e| e.to_string())? else {
+                continue;
+            };
+            if item.task_id == task.id && item.run_id == run.id {
+                items_to_retry.push(item);
+            }
+        }
+
+        let logger = build_retry_logger(app.clone(), task.id.clone(), run.id.clone());
+        let checker = build_retry_checker(&conn, &task, logger)?;
+        (task, run, items_to_retry, checker)
+    };
+
+    {
+        let conn = init::open_db().map_err(|e| e.to_string())?;
+        write_task_log_and_emit(
+            &conn,
+            Some(&app),
+            &task.id,
+            Some(&run.id),
+            "warn",
+            &format!("Starting retry for {} scan results", items_to_retry.len()),
+        );
+    }
+
+    for item in items_to_retry {
+        {
+            let conn = init::open_db().map_err(|e| e.to_string())?;
+            write_task_log_and_emit(
+                &conn,
+                Some(&app),
+                &task.id,
+                Some(&run.id),
+                "warn",
+                &format!("Retrying scan result for {}", item.domain),
+            );
+        }
+
+        let result = checker.check_domain(&item.domain).await;
+        {
+            let conn = init::open_db().map_err(|e| e.to_string())?;
+            let scan_repo = ScanItemRepo::new(&conn);
+            scan_repo
+                .update_status(
+                    item.id,
+                    &result.status,
+                    result.is_available,
+                    result.query_method.as_deref(),
+                    result.response_time_ms,
+                    result.error_message.as_deref(),
+                )
+                .map_err(|e| e.to_string())?;
+        }
+
+        let level = if matches!(result.status, ScanItemStatus::Error) {
+            "error"
+        } else {
+            "warn"
+        };
+        {
+            let conn = init::open_db().map_err(|e| e.to_string())?;
+            write_task_log_and_emit(
+                &conn,
+                Some(&app),
+                &task.id,
+                Some(&run.id),
+                level,
+                &format!(
+                    "Retry finished for {}: {}",
+                    item.domain,
+                    format_retry_result_message(&result.status, result.error_message.as_deref())
+                ),
+            );
+        }
+        updated_count += 1;
+    }
+
+    let (available_count, error_count) = {
+        let conn = init::open_db().map_err(|e| e.to_string())?;
+        let scan_repo = ScanItemRepo::new(&conn);
+        let run_repo = TaskRunRepo::new(&conn);
+        let task_repo = TaskRepo::new(&conn);
+
+        let available_count = scan_repo
+            .count_by_task(&task.id, Some(&run.id), Some(&ScanItemStatus::Available))
+            .map_err(|e| e.to_string())?;
+        let error_count = scan_repo
+            .count_by_task(&task.id, Some(&run.id), Some(&ScanItemStatus::Error))
+            .map_err(|e| e.to_string())?;
+
+        run_repo
+            .update_progress(&run.id, run.completed_count, available_count, error_count)
+            .map_err(|e| e.to_string())?;
+
+        if run_repo
+            .get_latest_by_task(&task.id)
+            .map_err(|e| e.to_string())?
+            .map(|latest| latest.id == run.id)
+            .unwrap_or(false)
+        {
+            task_repo
+                .update_progress(
+                    &task.id,
+                    task.completed_count,
+                    task.completed_index,
+                    available_count,
+                    error_count,
+                )
+                .map_err(|e| e.to_string())?;
+        }
+
+        (available_count, error_count)
+    };
+
+    let _ = app.emit(
+        "scan-results-updated",
+        ScanResultsUpdatedEvent {
+            task_id: task.id.clone(),
+            run_id: run.id.clone(),
+            flushed_count: updated_count,
+            completed_count: run.completed_count,
+        },
+    );
+
+    {
+        let conn = init::open_db().map_err(|e| e.to_string())?;
+        write_task_log_and_emit(
+            &conn,
+            Some(&app),
+            &task.id,
+            Some(&run.id),
+            "warn",
+            &format!(
+                "Retry completed: {} items updated, available {}, error {}",
+                updated_count, available_count, error_count
+            ),
+        );
+    }
+
+    serde_json::to_string(&RetryScanItemsResponse {
+        updated_count,
+        available_count,
+        error_count,
+        run_id: run.id,
+    })
+    .map_err(|e| e.to_string())
+}
+
+fn build_retry_checker(
+    conn: &rusqlite::Connection,
+    task: &Task,
+    logger: Arc<dyn Fn(String, String) + Send + Sync>,
+) -> Result<DomainChecker, String> {
+    let check_config = CheckConfig::default();
+    let checker = match task.proxy_id {
+        Some(proxy_id) => {
+            let proxy_repo = ProxyRepo::new(conn);
+            let proxy = proxy_repo
+                .get_by_id(proxy_id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("Proxy not found: {}", proxy_id))?;
+            let reqwest_proxy = ProxyManager::build_reqwest_proxy(&proxy)?;
+            DomainChecker::with_proxy(check_config, reqwest_proxy, describe_proxy_label(&proxy))
+        }
+        None => DomainChecker::new(check_config),
+    };
+
+    Ok(checker.with_log_hook(logger))
+}
+
+fn build_retry_logger(
+    app: tauri::AppHandle,
+    task_id: String,
+    run_id: String,
+) -> Arc<dyn Fn(String, String) + Send + Sync> {
+    Arc::new(move |level: String, message: String| {
+        if let Ok(conn) = init::open_db() {
+            write_request_log_and_emit(
+                &conn,
+                Some(&app),
+                &task_id,
+                Some(&run_id),
+                &level,
+                &message,
+            );
+        }
+    })
+}
+
+fn write_request_log_and_emit(
+    conn: &rusqlite::Connection,
+    app: Option<&tauri::AppHandle>,
+    task_id: &str,
+    run_id: Option<&str>,
+    level: &str,
+    message: &str,
+) {
+    let repo = LogRepo::new(conn);
+    match repo.create_request_entry(task_id, run_id, level, message) {
+        Ok(entry) => {
+            if let Some(app) = app {
+                if entry.level != "info" {
+                    let _ = app.emit("task-log-created", &entry);
+                    let _ = app.emit(&format!("task-log-{}", task_id), &entry);
+                }
+            }
+        }
+        Err(err) => tracing::warn!("Failed to write retry request log: {}", err),
+    }
+}
+
+fn write_task_log_and_emit(
+    conn: &rusqlite::Connection,
+    app: Option<&tauri::AppHandle>,
+    task_id: &str,
+    run_id: Option<&str>,
+    level: &str,
+    message: &str,
+) {
+    let repo = LogRepo::new(conn);
+    match repo.create_entry(task_id, run_id, level, message) {
+        Ok(entry) => {
+            if let Some(app) = app {
+                if entry.level != "info" {
+                    let _ = app.emit("task-log-created", &entry);
+                    let _ = app.emit(&format!("task-log-{}", task_id), &entry);
+                }
+            }
+        }
+        Err(err) => tracing::warn!("Failed to write retry log: {}", err),
+    }
+}
+
+fn format_retry_result_message(status: &ScanItemStatus, error_message: Option<&str>) -> String {
+    match status {
+        ScanItemStatus::Available => "available".to_string(),
+        ScanItemStatus::Unavailable => "registered".to_string(),
+        ScanItemStatus::Checking => "checking".to_string(),
+        ScanItemStatus::Pending => "pending".to_string(),
+        ScanItemStatus::Error => error_message.unwrap_or("error").to_string(),
+    }
+}
+
+fn describe_proxy_label(proxy: &crate::models::proxy::ProxyConfig) -> String {
+    let label = proxy.name.as_deref().unwrap_or(proxy.url.as_str());
+    format!("{} [{}]", label, proxy.proxy_type.to_url_scheme())
+}
+
+fn describe_proxy_id_label(repo: &ProxyRepo<'_>, proxy_id: Option<i64>) -> Result<String, String> {
+    match proxy_id {
+        Some(id) => {
+            let proxy = repo
+                .get_by_id(id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("Proxy not found: {}", id))?;
+            Ok(describe_proxy_label(&proxy))
+        }
+        None => Ok("direct".to_string()),
+    }
 }
 
 #[cfg(test)]

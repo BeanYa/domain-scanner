@@ -3,7 +3,7 @@ use crate::models::gpu::GpuBackend;
 /// Uses OpenAI-compatible embedding API
 use crate::models::llm::LlmConfig;
 
-const EMBEDDING_DIM: usize = 384;
+pub const EMBEDDING_DIM: usize = 384;
 
 /// Remote embedding client
 pub struct RemoteEmbeddingClient {
@@ -50,11 +50,14 @@ impl RemoteEmbeddingClient {
         struct EmbeddingRequest {
             model: String,
             input: Vec<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            dimensions: Option<i64>,
         }
 
         let request = EmbeddingRequest {
             model: embedding_model.clone(),
             input: texts.to_vec(),
+            dimensions: Some(self.config.embedding_dim),
         };
 
         let response = self
@@ -99,6 +102,14 @@ impl RemoteEmbeddingClient {
             .into_iter()
             .map(|d| d.embedding)
             .collect();
+
+        let dim = embeddings.first().map(|e| e.len()).unwrap_or(EMBEDDING_DIM);
+        if dim != self.config.embedding_dim as usize {
+            return Err(format!(
+                "Embedding dimension mismatch: API returned {}, config expects {}",
+                dim, self.config.embedding_dim
+            ));
+        }
 
         Ok(RemoteEmbeddingResult {
             dim: embeddings.first().map(|e| e.len()).unwrap_or(EMBEDDING_DIM),

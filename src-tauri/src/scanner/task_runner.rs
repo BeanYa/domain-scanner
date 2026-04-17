@@ -5,7 +5,7 @@ use tauri::{AppHandle, Emitter};
 use tokio_util::sync::CancellationToken;
 
 use crate::db::init;
-use crate::db::log_repo::LogRepo;
+use crate::db::log_repo::{LogRepo, LogType};
 use crate::db::proxy_repo::ProxyRepo;
 use crate::db::task_repo::TaskRepo;
 use crate::db::task_run_repo::TaskRunRepo;
@@ -13,13 +13,19 @@ use crate::models::proxy::ProxyConfig;
 use crate::models::task::{TaskRun, TaskStatus};
 use crate::proxy::manager::ProxyManager;
 use crate::scanner::domain_checker::{CheckConfig, DomainChecker};
-use crate::scanner::engine::{EngineConfig, ScanEngine};
+use crate::scanner::engine::{CancelIntent, EngineConfig, ScanEngine};
 use crate::scanner::list_generator::ListGenerator;
 use uuid::Uuid;
 
 /// Manages running scan tasks — tracks spawned tokio tasks and their cancellation tokens
 pub struct TaskRunner {
-    running: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    running: Arc<Mutex<HashMap<String, RunningTaskControl>>>,
+}
+
+#[derive(Clone)]
+struct RunningTaskControl {
+    token: CancellationToken,
+    intent: Arc<Mutex<CancelIntent>>,
 }
 
 impl TaskRunner {
@@ -80,6 +86,7 @@ impl TaskRunner {
         } else {
             None
         };
+        let task_name = task.name.clone();
         let proxy_label = describe_proxy(proxy_config.as_ref());
         let start_message = if matches!(task.status, TaskStatus::Paused) {
             format!("Run #{} resumed via {}", run.run_number, proxy_label)
@@ -100,8 +107,10 @@ impl TaskRunner {
         let _ = app.emit(
             "task-status-change",
             serde_json::json!({
-                "task_id": task_id,
+                "task_id": task_id.clone(),
+                "task_name": task_name.clone(),
                 "status": "running",
+                "message": "任务已开始运行",
             }),
         );
 
@@ -111,19 +120,28 @@ impl TaskRunner {
             ..EngineConfig::default()
         };
         let cancel_token = CancellationToken::new();
+        let cancel_intent = Arc::new(Mutex::new(CancelIntent::Pause));
         let scan_token = cancel_token.clone();
+        let scan_intent = cancel_intent.clone();
         let status_token = cancel_token.clone();
 
         // Store token
         {
             let mut map = self.running.lock().map_err(|e| e.to_string())?;
-            map.insert(task_id.clone(), cancel_token);
+            map.insert(
+                task_id.clone(),
+                RunningTaskControl {
+                    token: cancel_token,
+                    intent: cancel_intent,
+                },
+            );
         }
 
         let running_ref = self.running.clone();
         let tid = task_id.clone();
         let run_id = run.id.clone();
         let run_number = run.run_number;
+        let task_name_for_spawn = task_name.clone();
         let task_concurrency = task.concurrency;
         let proxy_config_for_spawn = proxy_config.clone();
         let engine_config_for_spawn = engine_config.clone();
@@ -152,8 +170,11 @@ impl TaskRunner {
                     let _ = app.emit(
                         "task-status-change",
                         serde_json::json!({
-                            "task_id": tid,
+                            "task_id": tid.clone(),
+                            "task_name": task_name_for_spawn.clone(),
                             "status": "paused",
+                            "reason": "scan_error",
+                            "message": "任务已暂停：无法打开扫描数据库",
                         }),
                     );
                     let _ = app.emit(
@@ -173,7 +194,7 @@ impl TaskRunner {
             let log_task_id = tid.clone();
             let log_run_id = run_id.clone();
             let request_logger = Arc::new(move |level: String, message: String| {
-                write_log_and_emit_locked(
+                write_request_log_and_emit_locked(
                     &log_conn,
                     &log_app,
                     &log_task_id,
@@ -193,9 +214,13 @@ impl TaskRunner {
                     )
                     .with_log_hook(request_logger.clone()),
                     Err(err) => {
-                        request_logger(
-                            "warn".to_string(),
-                            format!(
+                        write_log_and_emit_locked(
+                            &conn,
+                            &app,
+                            &tid,
+                            Some(&run_id),
+                            "warn",
+                            &format!(
                                 "Proxy {} is invalid for this run: {}. Falling back to direct connection",
                                 describe_proxy(Some(proxy_cfg)),
                                 err
@@ -209,9 +234,13 @@ impl TaskRunner {
                     DomainChecker::new(check_config.clone()).with_log_hook(request_logger.clone())
                 }
             };
-            request_logger(
-                "info".to_string(),
-                format!(
+            write_log_and_emit_locked(
+                &conn,
+                &app,
+                &tid,
+                Some(&run_id),
+                "info",
+                &format!(
                     "Run #{} preparing scan: {} candidates, concurrency {}, proxy {}",
                     run_number,
                     total_count,
@@ -220,7 +249,9 @@ impl TaskRunner {
                 ),
             );
             let engine = ScanEngine::from_parts(engine_config_for_spawn, checker);
-            let result = engine.run_scan(&tid, &run_id, conn, scan_token, &app).await;
+            let result = engine
+                .run_scan(&tid, &run_id, conn, scan_token, scan_intent, &app)
+                .await;
 
             // Clean up
             {
@@ -230,38 +261,68 @@ impl TaskRunner {
 
             match result {
                 Ok(progress) => {
+                    let pause_reason = progress.pause_reason.clone();
                     if !status_token.is_cancelled() {
                         if let Ok(c) = init::open_db() {
                             let run_repo = TaskRunRepo::new(&c);
-                            let _ = run_repo.update_status(&run_id, &TaskStatus::Completed, true);
-                            write_log_and_emit_direct(
-                                &c,
-                                Some(&app),
-                                &tid,
-                                Some(&run_id),
-                                "info",
-                                &format!(
-                                    "Run #{} completed: {} checked, {} available, {} errors",
-                                    run_number,
-                                    progress.completed_count,
-                                    progress.available_count,
-                                    progress.error_count
-                                ),
-                            );
+                            if pause_reason.as_deref() == Some("proxy_error_threshold") {
+                                write_log_and_emit_direct(
+                                    &c,
+                                    Some(&app),
+                                    &tid,
+                                    Some(&run_id),
+                                    "error",
+                                    "Task paused because the selected proxy produced too many request errors. Proxy status was set to error.",
+                                );
+                            } else {
+                                let _ =
+                                    run_repo.update_status(&run_id, &TaskStatus::Completed, true);
+                                write_log_and_emit_direct(
+                                    &c,
+                                    Some(&app),
+                                    &tid,
+                                    Some(&run_id),
+                                    "info",
+                                    &format!(
+                                        "Run #{} completed: {} checked, {} available, {} errors",
+                                        run_number,
+                                        progress.completed_count,
+                                        progress.available_count,
+                                        progress.error_count
+                                    ),
+                                );
+                            }
                         }
                     }
-                    let status = if status_token.is_cancelled() {
-                        "paused"
-                    } else {
-                        "completed"
+                    let status = match pause_reason.as_deref() {
+                        Some("manual_stop") => "stopped",
+                        _ if status_token.is_cancelled() || pause_reason.is_some() => "paused",
+                        _ => "completed",
                     };
-                    let _ = app.emit(
-                        "task-status-change",
-                        serde_json::json!({
-                            "task_id": tid,
-                            "status": status,
-                        }),
+                    let message = match status {
+                        "completed" => "任务已完成",
+                        "stopped" => "任务已停止；重新开始会创建新的运行记录",
+                        _ if pause_reason.as_deref() == Some("proxy_error_threshold") => {
+                            "任务已暂停：代理错误请求过多"
+                        }
+                        _ => "任务已暂停",
+                    };
+                    let manual_user_cancel = matches!(
+                        pause_reason.as_deref(),
+                        Some("manual_pause" | "manual_stop")
                     );
+                    if !manual_user_cancel {
+                        let _ = app.emit(
+                            "task-status-change",
+                            serde_json::json!({
+                                "task_id": tid.clone(),
+                                "task_name": task_name_for_spawn.clone(),
+                                "status": status,
+                                "reason": pause_reason,
+                                "message": message,
+                            }),
+                        );
+                    }
                     let _ = app.emit("scan-complete", &progress);
                 }
                 Err(e) => {
@@ -283,8 +344,11 @@ impl TaskRunner {
                     let _ = app.emit(
                         "task-status-change",
                         serde_json::json!({
-                            "task_id": tid,
+                            "task_id": tid.clone(),
+                            "task_name": task_name_for_spawn.clone(),
                             "status": "paused",
+                            "reason": "scan_error",
+                            "message": "任务已暂停：扫描失败",
                         }),
                     );
                     let _ = app.emit(
@@ -305,8 +369,11 @@ impl TaskRunner {
         let mut cancelled = false;
         {
             let map = self.running.lock().map_err(|e| e.to_string())?;
-            if let Some(token) = map.get(task_id) {
-                token.cancel();
+            if let Some(control) = map.get(task_id) {
+                if let Ok(mut intent) = control.intent.lock() {
+                    *intent = CancelIntent::Pause;
+                }
+                control.token.cancel();
                 cancelled = true;
             }
         }
@@ -338,7 +405,7 @@ impl TaskRunner {
                     latest_run.as_ref().map(|r| r.id.as_str()),
                     "info",
                     if cancelled {
-                        "Task stopped by user"
+                        "Task paused by user"
                     } else {
                         "Task marked as paused"
                     },
@@ -348,7 +415,10 @@ impl TaskRunner {
                         "task-status-change",
                         serde_json::json!({
                             "task_id": task_id,
+                            "task_name": task.name,
                             "status": "paused",
+                            "reason": "manual_pause",
+                            "message": "任务已暂停",
                         }),
                     );
                 }
@@ -356,6 +426,74 @@ impl TaskRunner {
             }
             TaskStatus::Paused => Ok(()),
             _ => Err(format!("Task {} is not running", task_id)),
+        }
+    }
+
+    /// Stop a task so it cannot be checkpoint-resumed. Use rerun to start over.
+    pub fn stop(&self, task_id: &str, app: Option<&AppHandle>) -> Result<(), String> {
+        let mut cancelled = false;
+        {
+            let map = self.running.lock().map_err(|e| e.to_string())?;
+            if let Some(control) = map.get(task_id) {
+                if let Ok(mut intent) = control.intent.lock() {
+                    *intent = CancelIntent::Stop;
+                }
+                control.token.cancel();
+                cancelled = true;
+            }
+        }
+
+        let conn = init::open_db().map_err(|e| e.to_string())?;
+        let repo = TaskRepo::new(&conn);
+        let run_repo = TaskRunRepo::new(&conn);
+        let task = repo
+            .get_by_id(task_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Task not found: {}", task_id))?;
+        let latest_run = run_repo
+            .get_latest_by_task(task_id)
+            .map_err(|e| e.to_string())?;
+
+        match task.status {
+            TaskStatus::Running | TaskStatus::Paused => {
+                repo.update_status(task_id, &TaskStatus::Stopped)
+                    .map_err(|e| e.to_string())?;
+                if let Some(run) = latest_run.as_ref() {
+                    run_repo
+                        .update_status(&run.id, &TaskStatus::Stopped, true)
+                        .map_err(|e| e.to_string())?;
+                }
+                write_log_and_emit_direct(
+                    &conn,
+                    app,
+                    task_id,
+                    latest_run.as_ref().map(|r| r.id.as_str()),
+                    "info",
+                    if cancelled {
+                        "Task stopped by user"
+                    } else {
+                        "Paused task marked as stopped"
+                    },
+                );
+                if let Some(app) = app {
+                    let _ = app.emit(
+                        "task-status-change",
+                        serde_json::json!({
+                            "task_id": task_id,
+                            "task_name": task.name,
+                            "status": "stopped",
+                            "reason": "manual_stop",
+                            "message": "任务已停止；重新开始会创建新的运行记录",
+                        }),
+                    );
+                }
+                Ok(())
+            }
+            TaskStatus::Stopped => Ok(()),
+            _ => Err(format!(
+                "Task {} cannot be stopped from {:?} state",
+                task_id, task.status
+            )),
         }
     }
 
@@ -402,8 +540,8 @@ impl TaskRunner {
     /// Cancel an in-memory running task without touching persisted state
     pub fn cancel(&self, task_id: &str) -> Result<bool, String> {
         let map = self.running.lock().map_err(|e| e.to_string())?;
-        if let Some(token) = map.get(task_id) {
-            token.cancel();
+        if let Some(control) = map.get(task_id) {
+            control.token.cancel();
             Ok(true)
         } else {
             Ok(false)
@@ -441,6 +579,7 @@ struct TaskLogEventPayload {
     id: i64,
     task_id: String,
     run_id: Option<String>,
+    log_type: String,
     level: String,
     message: String,
     created_at: String,
@@ -464,13 +603,30 @@ fn write_log_and_emit_direct(
     level: &str,
     message: &str,
 ) {
-    match create_task_log_event(conn, task_id, run_id, level, message) {
+    match create_log_event(conn, task_id, run_id, LogType::Task, level, message) {
         Ok(payload) => {
             if let Some(app) = app {
                 emit_task_log_events(app, &payload);
             }
         }
         Err(err) => tracing::warn!("Failed to write task log: {}", err),
+    }
+}
+
+fn write_request_log_and_emit_locked(
+    conn: &Mutex<rusqlite::Connection>,
+    app: &AppHandle,
+    task_id: &str,
+    run_id: Option<&str>,
+    level: &str,
+    message: &str,
+) {
+    match conn.lock() {
+        Ok(c) => match create_log_event(&c, task_id, run_id, LogType::Request, level, message) {
+            Ok(payload) => emit_task_log_events(app, &payload),
+            Err(err) => tracing::warn!("Failed to write request log: {}", err),
+        },
+        Err(err) => tracing::warn!("Failed to acquire request log DB lock: {}", err),
     }
 }
 
@@ -488,19 +644,21 @@ fn write_log_and_emit_locked(
     }
 }
 
-fn create_task_log_event(
+fn create_log_event(
     conn: &rusqlite::Connection,
     task_id: &str,
     run_id: Option<&str>,
+    log_type: LogType,
     level: &str,
     message: &str,
 ) -> Result<TaskLogEventPayload, rusqlite::Error> {
     let repo = LogRepo::new(conn);
-    let entry = repo.create_entry(task_id, run_id, level, message)?;
+    let entry = repo.create_entry_with_type(task_id, run_id, log_type, level, message)?;
     Ok(TaskLogEventPayload {
         id: entry.id,
         task_id: entry.task_id,
         run_id: entry.run_id,
+        log_type: entry.log_type,
         level: entry.level,
         message: entry.message,
         created_at: entry.created_at,

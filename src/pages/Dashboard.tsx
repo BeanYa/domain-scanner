@@ -23,6 +23,7 @@ import { useProxyStore } from "../store/proxyStore";
 const statusConfig = {
   running:   { label: "运行中", dotClass: "status-dot-running", btnIcon: Pause, btnLabel: "暂停", badgeClass: "badge-green" },
   paused:    { label: "已暂停", dotClass: "status-dot-paused",  btnIcon: Play, btnLabel: "继续", badgeClass: "badge-orange" },
+  stopped:   { label: "已停止", dotClass: "status-dot-idle", btnIcon: Play, btnLabel: "重新开始", badgeClass: "badge-red" },
   completed: { label: "已完成", dotClass: "status-dot-completed", btnIcon: ExternalLink, btnLabel: "查看", badgeClass: "badge-blue" },
   pending:   { label: "等待中", dotClass: "status-dot-idle", btnIcon: Play, btnLabel: "启动", badgeClass: "badge-neutral" },
 };
@@ -56,33 +57,25 @@ export default function Dashboard() {
       label: "运行中",
       value: String(runningCount),
       icon: Activity,
-      gradient: "from-cyber-green to-cyber-green-dim",
       textColor: "text-cyber-green",
-      shadowClass: "shadow-neon",
     },
     {
       label: "已完成",
       value: String(completedCount),
       icon: CheckCircle2,
-      gradient: "from-cyber-blue to-cyber-purple",
       textColor: "text-cyber-blue",
-      shadowClass: "shadow-neon-blue",
     },
     {
       label: "可用域名",
       value: availableCount.toLocaleString(),
       icon: Globe,
-      gradient: "from-cyber-orange to-amber-400",
       textColor: "text-cyber-orange",
-      shadowClass: "shadow-neon-orange",
     },
     {
       label: "代理在线",
       value: totalProxies > 0 ? `${activeProxies}/${totalProxies}` : "0",
       icon: Shield,
-      gradient: "from-cyber-cyan to-teal-400",
       textColor: "text-cyber-cyan",
-      shadowClass: "shadow-neon-cyan",
     },
   ];
 
@@ -105,12 +98,12 @@ export default function Dashboard() {
   const gpuDeviceName = gpuStatus?.device_name || "CPU Only";
 
   return (
-    <div className="space-y-6 animate-fade-in">
-      {/* Header */}
-      <div className="flex items-center justify-between">
+    <div className="page-shell">
+      <div className="editorial-panel p-6 lg:p-8 min-h-[220px] flex items-end justify-between gap-6">
         <div>
-          <h1 className="text-2xl font-bold neon-text tracking-tight">仪表盘</h1>
-          <p className="text-sm text-cyber-muted mt-1">域名扫描总览与系统状态</p>
+          <div className="eyebrow mb-4">CONTROL ROOM</div>
+          <h1 className="page-heading">Domain Scanner</h1>
+          <p className="page-subtitle">域名扫描总览、代理池状态与向量化能力集中监控。界面保持低干扰，让任务数据成为主视觉。</p>
         </div>
         <button
           onClick={() => navigate("/tasks/new")}
@@ -122,40 +115,36 @@ export default function Dashboard() {
         </button>
       </div>
 
-      {/* Stats Grid */}
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         {stats.map((stat) => (
-          <div key={stat.label} className={`stat-card group ${stat.shadowClass}`}>
+          <div key={stat.label} className="stat-card group">
             <div className="flex items-start justify-between mb-3">
-              <span className="text-xs font-medium text-cyber-muted uppercase tracking-wider">{stat.label}</span>
-              <div className={`w-9 h-9 rounded-xl bg-gradient-to-br ${stat.gradient} flex items-center justify-center`}>
-                <stat.icon className="w-4.5 h-4.5 text-white/90" />
+              <span className="eyebrow">{stat.label}</span>
+              <div className="w-9 h-9 rounded-md border border-cyber-border bg-cyber-surface flex items-center justify-center">
+                <stat.icon className="w-4 h-4 text-cyber-text-secondary" />
               </div>
             </div>
-            <p className={`text-3xl font-bold tracking-tight ${stat.textColor}`}>{stat.value}</p>
+            <p className={`text-3xl font-normal leading-none tabular-nums ${stat.textColor}`}>{stat.value}</p>
           </div>
         ))}
       </div>
 
-      {/* Main Content Area */}
-      <div className="grid grid-cols-3 gap-6">
-        {/* Recent Tasks Panel (2 cols wide) */}
-        <div className="col-span-2 glass-panel p-5 space-y-4">
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+        <div className="xl:col-span-2 glass-panel p-5 space-y-4">
           <div className="section-header">
             <h2 className="section-title">
-              <Clock className="w-4 h-4 text-cyber-green" />
+              <Clock className="w-4 h-4 text-cyber-text-secondary" />
               最近任务
             </h2>
             <button
               onClick={() => navigate("/tasks")}
-              className="cyber-btn-ghost cyber-btn-sm text-cyber-muted-dim hover:text-cyber-green group"
+              className="cyber-btn-ghost cyber-btn-sm text-cyber-muted-dim hover:text-white group"
             >
               查看全部
               <ArrowRight className="w-3 h-3 transition-transform group-hover:translate-x-0.5" />
             </button>
           </div>
 
-          {/* Task List */}
           <div className="space-y-2.5">
             {recentTasks.length === 0 ? (
               <div className="text-center py-12 text-cyber-muted">
@@ -194,8 +183,8 @@ export default function Dashboard() {
                           <span className="text-xs font-mono text-cyber-muted w-9 text-right tabular-nums">{task.progress}%</span>
                         </div>
                       </div>
-                      <div className="text-right shrink-0 pl-2 border-l border-cyber-border/20 min-w-[72px]">
-                        <p className="text-lg font-bold text-cyber-green tabular-nums">{task.available.toLocaleString()}</p>
+                      <div className="text-right shrink-0 pl-2 border-l border-cyber-border min-w-[72px]">
+                        <p className="text-lg font-normal text-cyber-green tabular-nums">{task.available.toLocaleString()}</p>
                         <p className="text-[10px] text-cyber-muted-dim">可用域名</p>
                       </div>
                     </div>
@@ -206,12 +195,10 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Right Sidebar */}
         <div className="space-y-4">
-          {/* Quick Actions Card */}
           <div className="glass-panel p-5">
             <h2 className="section-title mb-4">
-              <TrendingUp className="w-4 h-4 text-cyber-cyan-bright" />
+              <TrendingUp className="w-4 h-4 text-cyber-text-secondary" />
               快捷操作
             </h2>
             <div className="space-y-2">
@@ -239,14 +226,13 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* GPU / System Status Card */}
           <div className="glass-panel p-5 space-y-4">
             <h2 className="section-title">
-              <Cpu className="w-4 h-4 text-cyber-green" />
+              <Cpu className="w-4 h-4 text-cyber-text-secondary" />
               系统状态
             </h2>
 
-            <div className="rounded-xl bg-cyber-bg-elevated/60 p-3.5 space-y-2.5">
+            <div className="rounded-md bg-cyber-surface p-3.5 space-y-2.5 border border-cyber-border">
               <div className="flex items-center justify-between">
                 <span className="text-xs text-cyber-muted">推理后端</span>
                 <span className={`text-xs font-semibold px-2 py-0.5 rounded-md ${
@@ -273,12 +259,12 @@ export default function Dashboard() {
               <div className="divider my-1" />
 
               {gpuStatus?.available && gpuStatus.backend !== "cpu" ? (
-                <div className="flex items-center gap-2 p-2 rounded-lg bg-cyber-green/4 border border-cyber-green/12">
+                <div className="flex items-center gap-2 p-2 rounded-md bg-white/[0.04] border border-white/10">
                   <Cpu className="w-3.5 h-3.5 text-cyber-green/70" />
                   <span className="text-[11px] text-cyber-green/80">GPU 加速已启用</span>
                 </div>
               ) : (
-                <div className="flex items-center gap-2 p-2 rounded-lg bg-cyber-orange/4 border border-cyber-orange/12">
+                <div className="flex items-center gap-2 p-2 rounded-md bg-cyber-orange/10 border border-cyber-orange/20">
                   <Cpu className="w-3.5 h-3.5 text-cyber-orange/70" />
                   <span className="text-[11px] text-cyber-orange/80">CPU 模式运行中，可在设置中配置 GPU</span>
                 </div>

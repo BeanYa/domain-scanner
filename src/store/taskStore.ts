@@ -12,6 +12,8 @@ interface TaskStore {
   createTasks: (name: string, scanMode: ScanMode, tlds: string[], batchName?: string, concurrency?: number, proxyId?: number) => Promise<BatchCreateResult>;
   startTask: (taskId: string) => Promise<void>;
   pauseTask: (taskId: string) => Promise<void>;
+  stopTask: (taskId: string) => Promise<void>;
+  updateTaskSettings: (taskId: string, concurrency: number, proxyId: number | null) => Promise<Task>;
   resumeTask: (taskId: string) => Promise<void>;
   rerunTask: (taskId: string) => Promise<string>;
   deleteTask: (taskId: string) => Promise<void>;
@@ -83,6 +85,35 @@ export const useTaskStore = create<TaskStore>((set) => ({
   pauseTask: async (taskId: string) => {
     try {
       await invokeCommand("pause_task", { taskId });
+    } catch (e) {
+      set({ error: String(e) });
+      throw e;
+    }
+  },
+
+  stopTask: async (taskId: string) => {
+    try {
+      await invokeCommand("stop_task", { taskId });
+    } catch (e) {
+      set({ error: String(e) });
+      throw e;
+    }
+  },
+
+  updateTaskSettings: async (taskId: string, concurrency: number, proxyId: number | null) => {
+    try {
+      const result = await invokeCommand<string>("update_task_settings", {
+        request: {
+          task_id: taskId,
+          concurrency,
+          proxy_id: proxyId,
+        },
+      });
+      const updated = JSON.parse(result) as Task;
+      set((state) => ({
+        tasks: state.tasks.map((task) => (task.id === taskId ? updated : task)),
+      }));
+      return updated;
     } catch (e) {
       set({ error: String(e) });
       throw e;

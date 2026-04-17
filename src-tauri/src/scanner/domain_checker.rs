@@ -1,5 +1,6 @@
 use crate::models::scan_item::ScanItemStatus;
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, USER_AGENT};
+use reqwest::Method;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -12,6 +13,7 @@ pub struct CheckResult {
     pub query_method: Option<String>,
     pub response_time_ms: Option<i64>,
     pub error_message: Option<String>,
+    pub proxy_error: bool,
 }
 
 pub type CheckLogger = Arc<dyn Fn(String, String) + Send + Sync>;
@@ -28,6 +30,20 @@ enum RdapErrorKind {
 struct RdapError {
     kind: RdapErrorKind,
     message: String,
+    proxy_related: bool,
+}
+
+#[derive(Debug, Clone)]
+struct RdapEndpoint {
+    url: String,
+    uses_aggregator: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct RdapProbeEndpoint {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub url: &'static str,
 }
 
 /// Configuration for domain checking
@@ -44,8 +60,8 @@ impl Default for CheckConfig {
         Self {
             rdap_timeout: Duration::from_secs(10),
             dns_timeout: Duration::from_secs(5),
-            max_retries: 2,
-            retry_delays: vec![Duration::from_millis(800), Duration::from_millis(1500)],
+            max_retries: 1,
+            retry_delays: vec![Duration::from_millis(800)],
         }
     }
 }
@@ -60,6 +76,61 @@ pub struct DomainChecker {
 }
 
 impl DomainChecker {
+    pub fn rdap_probe_endpoints() -> Vec<RdapProbeEndpoint> {
+        vec![
+            RdapProbeEndpoint {
+                key: "rdap-com",
+                label: ".com / Verisign",
+                url: "https://rdap.verisign.com/com/v1/domain/example.com",
+            },
+            RdapProbeEndpoint {
+                key: "rdap-net",
+                label: ".net / Verisign",
+                url: "https://rdap.verisign.com/net/v1/domain/example.net",
+            },
+            RdapProbeEndpoint {
+                key: "rdap-org",
+                label: ".org / PIR",
+                url: "https://rdap.publicinterestregistry.org/rdap/domain/example.org",
+            },
+            RdapProbeEndpoint {
+                key: "rdap-io",
+                label: ".io / NIC.IO",
+                url: "https://rdap.nic.io/domain/example.io",
+            },
+            RdapProbeEndpoint {
+                key: "rdap-co",
+                label: ".co / NIC.CO",
+                url: "https://rdap.nic.co/domain/example.co",
+            },
+            RdapProbeEndpoint {
+                key: "rdap-dev",
+                label: ".dev / Google Registry",
+                url: "https://rdap.nic.dev/domain/example.dev",
+            },
+            RdapProbeEndpoint {
+                key: "rdap-app",
+                label: ".app / Google Registry",
+                url: "https://rdap.nic.app/domain/example.app",
+            },
+            RdapProbeEndpoint {
+                key: "rdap-ai",
+                label: ".ai / NIC.AI",
+                url: "https://rdap.nic.ai/domain/example.ai",
+            },
+            RdapProbeEndpoint {
+                key: "rdap-de",
+                label: ".de / DENIC",
+                url: "https://rdap.denic.de/domain/example.de",
+            },
+            RdapProbeEndpoint {
+                key: "rdap-aggregator",
+                label: "Fallback / rdap.org",
+                url: "https://rdap.org/domain/example.xyz",
+            },
+        ]
+    }
+
     pub fn new(config: CheckConfig) -> Self {
         Self::build(config, None, None)
     }
@@ -97,6 +168,7 @@ impl DomainChecker {
                     query_method: Some("rdap".to_string()),
                     response_time_ms: Some(elapsed),
                     error_message: None,
+                    proxy_error: false,
                 }
             }
             Err(e) => {
@@ -129,6 +201,7 @@ impl DomainChecker {
                                 "RDAP failed: {}; DNS fallback completed but result is not authoritative, {}",
                                 e.message, hint
                             )),
+                            proxy_error: e.proxy_related,
                         }
                     }
                     Err(dns_err) => {
@@ -144,6 +217,7 @@ impl DomainChecker {
                             query_method: None,
                             response_time_ms: Some(elapsed),
                             error_message: Some(format!("RDAP: {}, DNS: {}", e.message, dns_err)),
+                            proxy_error: e.proxy_related,
                         }
                     }
                 }
@@ -154,7 +228,7 @@ impl DomainChecker {
     /// Check via RDAP with exponential backoff retry
     async fn check_rdap_with_retry(&self, domain: &str) -> Result<bool, RdapError> {
         let tld = extract_tld(domain);
-        let rdap_url = self.get_rdap_url(domain, &tld);
+        let endpoint = self.get_rdap_endpoint(domain, &tld);
         let total_attempts = self.config.max_retries + 1;
         let mut last_error = None;
 
@@ -167,12 +241,12 @@ impl DomainChecker {
                     attempt_number,
                     total_attempts,
                     domain,
-                    rdap_url,
+                    endpoint.url,
                     self.transport_label()
                 ),
             );
 
-            match self.query_rdap(&rdap_url).await {
+            match self.query_rdap(&endpoint).await {
                 Ok(available) => {
                     self.log(
                         "info",
@@ -246,47 +320,125 @@ impl DomainChecker {
         Err(last_error.unwrap_or_else(|| RdapError {
             kind: RdapErrorKind::Permanent,
             message: "RDAP request failed".to_string(),
+            proxy_related: false,
         }))
     }
 
     /// Query RDAP server
-    async fn query_rdap(&self, url: &str) -> Result<bool, RdapError> {
-        let response = self.http_client.get(url).send().await;
+    async fn query_rdap(&self, endpoint: &RdapEndpoint) -> Result<bool, RdapError> {
+        match self.query_rdap_with_method(endpoint, Method::HEAD).await? {
+            Some(available) => Ok(available),
+            None => {
+                self.log(
+                    "info",
+                    format!(
+                        "RDAP HEAD not supported for {}. Retrying with GET",
+                        endpoint.url
+                    ),
+                );
+                self.query_rdap_with_method(endpoint, Method::GET)
+                    .await?
+                    .ok_or_else(|| RdapError {
+                        kind: RdapErrorKind::Permanent,
+                        message: "RDAP GET request returned no result".to_string(),
+                        proxy_related: false,
+                    })
+            }
+        }
+    }
+
+    async fn query_rdap_with_method(
+        &self,
+        endpoint: &RdapEndpoint,
+        method: Method,
+    ) -> Result<Option<bool>, RdapError> {
+        let response = self
+            .http_client
+            .request(method.clone(), &endpoint.url)
+            .send()
+            .await;
         match response {
             Ok(resp) => match resp.status() {
-                s if s == reqwest::StatusCode::OK => Ok(false),
-                s if s == reqwest::StatusCode::NOT_FOUND => Ok(true),
+                s if s == reqwest::StatusCode::OK => Ok(Some(false)),
+                s if s == reqwest::StatusCode::NOT_FOUND => Ok(Some(true)),
+                s if method == Method::HEAD
+                    && (s == reqwest::StatusCode::METHOD_NOT_ALLOWED
+                        || s == reqwest::StatusCode::NOT_IMPLEMENTED) =>
+                {
+                    Ok(None)
+                }
                 s if s == reqwest::StatusCode::TOO_MANY_REQUESTS => Err(RdapError {
                     kind: RdapErrorKind::RateLimited,
-                    message: "RDAP returned status: 429 Too Many Requests".to_string(),
+                    message: format!("RDAP {} returned status: 429 Too Many Requests", method),
+                    proxy_related: false,
+                }),
+                s if s == reqwest::StatusCode::PROXY_AUTHENTICATION_REQUIRED => Err(RdapError {
+                    kind: RdapErrorKind::Forbidden,
+                    message: format!(
+                        "RDAP {} returned proxy authentication status: {}",
+                        method, s
+                    ),
+                    proxy_related: true,
                 }),
                 s if s == reqwest::StatusCode::FORBIDDEN
                     || s == reqwest::StatusCode::UNAUTHORIZED =>
                 {
                     Err(RdapError {
                         kind: RdapErrorKind::Forbidden,
-                        message: format!("RDAP returned status: {}", s),
+                        message: format!("RDAP {} returned status: {}", method, s),
+                        proxy_related: false,
                     })
                 }
                 s if s.is_server_error() || s == reqwest::StatusCode::REQUEST_TIMEOUT => {
                     Err(RdapError {
                         kind: RdapErrorKind::Retryable,
-                        message: format!("RDAP returned status: {}", s),
+                        message: format!("RDAP {} returned status: {}", method, s),
+                        proxy_related: false,
                     })
                 }
                 s => Err(RdapError {
                     kind: RdapErrorKind::Permanent,
-                    message: format!("RDAP returned status: {}", s),
+                    message: format!("RDAP {} returned status: {}", method, s),
+                    proxy_related: false,
                 }),
             },
-            Err(e) => Err(RdapError {
-                kind: if e.is_timeout() || e.is_connect() || e.is_request() {
-                    RdapErrorKind::Retryable
-                } else {
-                    RdapErrorKind::Permanent
-                },
-                message: format!("RDAP request failed: {}", e),
-            }),
+            Err(e) => {
+                let request_transport_error = e.is_timeout() || e.is_connect() || e.is_request();
+                Err(RdapError {
+                    kind: if request_transport_error {
+                        if endpoint.uses_aggregator {
+                            RdapErrorKind::Permanent
+                        } else {
+                            RdapErrorKind::Retryable
+                        }
+                    } else {
+                        RdapErrorKind::Permanent
+                    },
+                    message: format!("RDAP {} request failed: {}", method, e),
+                    proxy_related: self.proxy_label.is_some() && request_transport_error,
+                })
+            }
+        }
+    }
+
+    /// Get RDAP URL for a domain
+    fn get_rdap_endpoint(&self, domain: &str, tld: &str) -> RdapEndpoint {
+        let (rdap_base, uses_aggregator) = match tld {
+            ".com" => ("https://rdap.verisign.com/com/v1", false),
+            ".net" => ("https://rdap.verisign.com/net/v1", false),
+            ".org" => ("https://rdap.publicinterestregistry.org/rdap", false),
+            ".io" => ("https://rdap.nic.io", false),
+            ".co" => ("https://rdap.nic.co", false),
+            ".dev" => ("https://rdap.nic.dev", false),
+            ".app" => ("https://rdap.nic.app", false),
+            ".ai" => ("https://rdap.nic.ai", false),
+            ".de" => ("https://rdap.denic.de", false),
+            _ => ("https://rdap.org", true),
+        };
+
+        RdapEndpoint {
+            url: format!("{}/domain/{}", rdap_base, domain),
+            uses_aggregator,
         }
     }
 
@@ -316,22 +468,6 @@ impl DomainChecker {
                 }
             }
         }
-    }
-
-    /// Get RDAP URL for a domain
-    fn get_rdap_url(&self, domain: &str, tld: &str) -> String {
-        let rdap_base = match tld {
-            ".com" => "https://rdap.verisign.com/com/v1",
-            ".net" => "https://rdap.verisign.com/net/v1",
-            ".org" => "https://rdap.publicinterestregistry.org/rdap",
-            ".io" => "https://rdap.nic.io",
-            ".co" => "https://rdap.nic.co",
-            ".dev" => "https://rdap.nic.dev",
-            ".app" => "https://rdap.nic.app",
-            ".ai" => "https://rdap.nic.ai",
-            _ => "https://rdap.org",
-        };
-        format!("{}/domain/{}", rdap_base, domain)
     }
 
     /// Check multiple domains concurrently
@@ -414,12 +550,13 @@ fn extract_tld(domain: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mockito::Server;
 
     #[test]
     fn test_check_config_default() {
         let config = CheckConfig::default();
-        assert_eq!(config.max_retries, 2);
-        assert_eq!(config.retry_delays.len(), 2);
+        assert_eq!(config.max_retries, 1);
+        assert_eq!(config.retry_delays.len(), 1);
         assert_eq!(config.rdap_timeout, Duration::from_secs(10));
     }
 
@@ -434,16 +571,20 @@ mod tests {
     fn test_get_rdap_url() {
         let checker = DomainChecker::with_default_config();
         assert_eq!(
-            checker.get_rdap_url("example.com", ".com"),
+            checker.get_rdap_endpoint("example.com", ".com").url,
             "https://rdap.verisign.com/com/v1/domain/example.com"
         );
         assert_eq!(
-            checker.get_rdap_url("example.net", ".net"),
+            checker.get_rdap_endpoint("example.net", ".net").url,
             "https://rdap.verisign.com/net/v1/domain/example.net"
         );
         assert_eq!(
-            checker.get_rdap_url("example.org", ".org"),
+            checker.get_rdap_endpoint("example.org", ".org").url,
             "https://rdap.publicinterestregistry.org/rdap/domain/example.org"
+        );
+        assert_eq!(
+            checker.get_rdap_endpoint("example.de", ".de").url,
+            "https://rdap.denic.de/domain/example.de"
         );
     }
 
@@ -456,8 +597,39 @@ mod tests {
             query_method: Some("rdap".to_string()),
             response_time_ms: Some(150),
             error_message: None,
+            proxy_error: false,
         };
         assert_eq!(result.domain, "test.com");
         assert!(result.is_available.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_query_rdap_falls_back_to_get_when_head_is_not_supported() {
+        let mut server = Server::new_async().await;
+        let path = "/domain/example.test";
+        let _head_mock = server
+            .mock("HEAD", path)
+            .with_status(405)
+            .create_async()
+            .await;
+        let _get_mock = server
+            .mock("GET", path)
+            .with_status(404)
+            .create_async()
+            .await;
+
+        let checker = DomainChecker {
+            config: CheckConfig::default(),
+            http_client: reqwest::Client::builder().build().unwrap(),
+            proxy_label: None,
+            logger: None,
+        };
+        let endpoint = RdapEndpoint {
+            url: format!("{}{}", server.url(), path),
+            uses_aggregator: false,
+        };
+
+        let result = checker.query_rdap(&endpoint).await.unwrap();
+        assert!(result);
     }
 }

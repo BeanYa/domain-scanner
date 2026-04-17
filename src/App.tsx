@@ -8,6 +8,7 @@ import FilterResults from "./pages/FilterResults";
 import VectorizePage from "./pages/VectorizePage";
 import ProxyManager from "./pages/ProxyManager";
 import Settings from "./pages/Settings";
+import TaskStatusNotifications from "./components/TaskStatusNotifications";
 
 const App = () => {
   return (
@@ -25,6 +26,7 @@ const App = () => {
           <Route path="settings" element={<Settings />} />
         </Route>
       </Routes>
+      <TaskStatusNotifications />
     </BrowserRouter>
   );
 };

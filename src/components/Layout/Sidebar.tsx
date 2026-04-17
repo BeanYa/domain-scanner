@@ -34,36 +34,33 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
     <aside
       className={`fixed left-0 top-0 h-screen z-50 flex flex-col transition-all duration-300 ease-out ${
         collapsed ? "w-[72px]" : "w-[240px]"
-      } bg-cyber-surface/90 backdrop-blur-2xl border-r border-cyber-border/30`}
+      } bg-black border-r border-cyber-border`}
     >
-      {/* Logo Area */}
-      <div className="h-16 px-4 flex items-center gap-3 border-b border-cyber-border/20">
-        <div className="w-9 h-9 shrink-0 rounded-xl bg-gradient-to-br from-cyber-green to-cyber-cyan flex items-center justify-center shadow-neon">
-          <Radar className="w-[18px] h-[18px] text-cyber-bg" />
+      <div className="h-16 px-4 flex items-center gap-3 border-b border-cyber-border">
+        <div className="w-9 h-9 shrink-0 rounded-md border border-cyber-border bg-cyber-bg-elevated flex items-center justify-center">
+          <Radar className="w-[18px] h-[18px] text-white" />
         </div>
         {!collapsed && (
           <div className="overflow-hidden animate-fade-in">
-            <h1 className="text-sm font-bold text-cyber-text tracking-wide leading-none">DomainScan</h1>
-            <p className="text-[10px] text-cyber-muted tracking-widest uppercase mt-0.5">Scanner Pro</p>
+            <h1 className="text-sm font-semibold text-cyber-text leading-none">DomainScan</h1>
+            <p className="eyebrow mt-1">Scanner Pro</p>
           </div>
         )}
       </div>
 
-      {/* Collapse Toggle */}
       <button
         onClick={onToggle}
-        className="absolute -right-3 top-20 w-6 h-6 rounded-full bg-cyber-card border border-cyber-border/50 
-                 flex items-center justify-center shadow-glass-sm hover:bg-cyber-card-hover hover:border-cyber-green/30 
-                 transition-all duration-200 cursor-pointer group"
+        className="absolute -right-3 top-20 w-6 h-6 rounded bg-cyber-bg-elevated border border-cyber-border
+                 flex items-center justify-center hover:bg-cyber-card hover:border-cyber-border-light
+                 transition-colors duration-150 cursor-pointer group"
       >
         {collapsed ? (
-          <PanelLeftOpen className="w-3.5 h-3.5 text-cyber-muted group-hover:text-cyber-green transition-colors" />
+          <PanelLeftOpen className="w-3.5 h-3.5 text-cyber-muted group-hover:text-white transition-colors" />
         ) : (
-          <PanelLeftClose className="w-3.5 h-3.5 text-cyber-muted group-hover:text-cyber-green transition-colors" />
+          <PanelLeftClose className="w-3.5 h-3.5 text-cyber-muted group-hover:text-white transition-colors" />
         )}
       </button>
 
-      {/* Navigation Links */}
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto no-scrollbar">
         {navItems.map(({ to, icon: Icon, label, shortcut }) => {
           const isActive =
@@ -77,24 +74,23 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
               title={collapsed ? label : undefined}
               className={`
                 group flex items-center ${collapsed ? "justify-center px-2" : "gap-3 px-3"}
-                py-2.5 rounded-xl text-sm font-medium transition-all duration-200 relative
+                py-2.5 rounded-md text-sm font-medium transition-colors duration-150 relative
                 ${
                   isActive
-                    ? "bg-gradient-to-r from-cyber-green/12 to-transparent text-cyber-green"
-                    : "text-cyber-muted hover:text-cyber-text-secondary hover:bg-cyber-card/50"
+                    ? "bg-cyber-card text-white"
+                    : "text-cyber-muted hover:text-cyber-text-secondary hover:bg-cyber-surface"
                 }
               `}
             >
-              {/* Active background glow */}
               {isActive && !collapsed && (
-                <span className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-full bg-cyber-green shadow-neon" />
+                <span className="absolute left-0 top-1/2 -translate-y-1/2 w-px h-5 bg-white" />
               )}
 
               <Icon
                 className={`shrink-0 transition-all duration-200 ${
                   collapsed ? "w-5 h-5" : "w-[18px] h-[18px]"
                 } ${
-                  isActive ? "text-cyber-green" : "text-cyber-muted-dim group-hover:text-cyber-text-secondary"
+                  isActive ? "text-white" : "text-cyber-muted-dim group-hover:text-cyber-text-secondary"
                 }`}
               />
 
@@ -103,7 +99,7 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
                   <span className="flex-1 truncate">{label}</span>
                   {shortcut && (
                     <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-mono ${
-                      isActive ? "bg-cyber-green/15 text-cyber-green-dim" : "bg-cyber-surface text-cyber-muted-dim opacity-0 group-hover:opacity-100 transition-opacity"
+                      isActive ? "bg-white/10 text-cyber-text-secondary" : "bg-cyber-surface text-cyber-muted-dim opacity-0 group-hover:opacity-100 transition-opacity"
                     }`}>
                       {shortcut}
                     </span>
@@ -111,18 +107,15 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 </>
               )}
 
-              {/* Collapsed active indicator (dot) */}
               {collapsed && isActive && (
-                <span className="absolute top-1 right-1.5 w-1.5 h-1.5 rounded-full bg-cyber-green animate-pulse" />
+                <span className="absolute top-1 right-1.5 w-1.5 h-1.5 rounded-sm bg-white" />
               )}
             </NavLink>
           );
         })}
       </nav>
 
-      {/* Bottom Section */}
-      <div className="px-4 py-4 border-t border-cyber-border/20 space-y-3">
-        {/* System Status */}
+      <div className="px-4 py-4 border-t border-cyber-border space-y-3">
         <div className={`flex items-center gap-2 ${collapsed ? "justify-center" : ""}`}>
           <span className="status-dot-running w-2 h-2" />
           {!collapsed && (
@@ -133,7 +126,6 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
           )}
         </div>
 
-        {/* Version / Build info - only when expanded */}
         {!collapsed && (
           <div className="text-[10px] text-cyber-muted-dim/60 leading-relaxed">
             Tauri 2.0 &middot; Rust + React

@@ -121,7 +121,10 @@ pub fn init_database(conn: &Connection) -> Result<(), Box<dyn std::error::Error>
             proxy_type TEXT NOT NULL,
             username TEXT,
             password TEXT,
-            is_active INTEGER DEFAULT 1
+            is_active INTEGER DEFAULT 0,
+            status TEXT DEFAULT '\"unavailable\"',
+            last_checked_at TEXT,
+            last_error TEXT
         );
 
         CREATE TABLE IF NOT EXISTS llm_configs (
@@ -131,7 +134,7 @@ pub fn init_database(conn: &Connection) -> Result<(), Box<dyn std::error::Error>
             api_key TEXT NOT NULL,
             model TEXT NOT NULL,
             embedding_model TEXT,
-            embedding_dim INTEGER DEFAULT 768,
+            embedding_dim INTEGER DEFAULT 384,
             is_default INTEGER DEFAULT 0
         );
 
@@ -154,6 +157,23 @@ pub fn init_database(conn: &Connection) -> Result<(), Box<dyn std::error::Error>
             embedding_id INTEGER
         );
         CREATE INDEX IF NOT EXISTS idx_filtered_results_task ON filtered_results(task_id);
+
+        CREATE TABLE IF NOT EXISTS vectorize_runs (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL REFERENCES tasks(id),
+            status TEXT NOT NULL,
+            backend TEXT NOT NULL,
+            total_count INTEGER DEFAULT 0,
+            processed_count INTEGER DEFAULT 0,
+            skipped_existing INTEGER DEFAULT 0,
+            batch_size INTEGER DEFAULT 0,
+            embedding_dim INTEGER DEFAULT 384,
+            error_message TEXT,
+            started_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            finished_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_vectorize_runs_task_updated ON vectorize_runs(task_id, updated_at DESC);
         "
     )?;
 
@@ -168,6 +188,10 @@ pub fn init_database(conn: &Connection) -> Result<(), Box<dyn std::error::Error>
     migrate_add_column(conn, "tasks", "proxy_id", "INTEGER");
     migrate_add_column(conn, "scan_items", "run_id", "TEXT");
     migrate_add_column(conn, "task_logs", "run_id", "TEXT");
+    migrate_add_column(conn, "proxies", "status", "TEXT DEFAULT '\"unavailable\"'");
+    migrate_add_column(conn, "proxies", "last_checked_at", "TEXT");
+    migrate_add_column(conn, "proxies", "last_error", "TEXT");
+    migrate_proxy_status_encoding(conn);
 
     Ok(())
 }
@@ -177,6 +201,33 @@ fn migrate_add_column(conn: &Connection, table: &str, column: &str, col_type: &s
     let sql = format!("ALTER TABLE {} ADD COLUMN {} {}", table, column, col_type);
     // "duplicate column name" error means it already exists — that's fine
     let _ = conn.execute(&sql, []);
+}
+
+fn migrate_proxy_status_encoding(conn: &Connection) {
+    let _ = conn.execute(
+        "UPDATE proxies
+         SET status = '\"pending\"', is_active = 0
+         WHERE status IS NULL OR status = 'pending' OR status = '\"pending\"'",
+        [],
+    );
+    let _ = conn.execute(
+        "UPDATE proxies
+         SET status = '\"unavailable\"', is_active = 0
+         WHERE status = 'unavailable' OR status = '\"unavailable\"'",
+        [],
+    );
+    let _ = conn.execute(
+        "UPDATE proxies
+         SET status = '\"error\"', is_active = 0
+         WHERE status = 'error' OR status = '\"error\"'",
+        [],
+    );
+    let _ = conn.execute(
+        "UPDATE proxies
+         SET status = '\"available\"', is_active = 1
+         WHERE status = 'available' OR status = '\"available\"'",
+        [],
+    );
 }
 
 /// Open a database connection and initialize schema
@@ -222,6 +273,7 @@ mod tests {
         assert!(tables.contains(&"gpu_configs".to_string()));
         assert!(tables.contains(&"filtered_results".to_string()));
         assert!(tables.contains(&"domain_vectors".to_string()));
+        assert!(tables.contains(&"vectorize_runs".to_string()));
     }
 
     #[test]
@@ -243,6 +295,7 @@ mod tests {
         assert!(indexes.contains(&"idx_task_logs_task".to_string()));
         assert!(indexes.contains(&"idx_task_runs_task_started".to_string()));
         assert!(indexes.contains(&"idx_filtered_results_task".to_string()));
+        assert!(indexes.contains(&"idx_vectorize_runs_task_updated".to_string()));
     }
 
     #[test]

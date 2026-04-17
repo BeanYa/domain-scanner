@@ -6,9 +6,10 @@ interface LlmStore {
   configs: LlmConfig[];
   loading: boolean;
   error: string | null;
+  testing: boolean;
 
   fetchConfigs: () => Promise<void>;
-  saveConfig: (config: Partial<LlmConfig> & { name: string; base_url: string; api_key: string; model: string }) => Promise<void>;
+  saveConfig: (config: Partial<LlmConfig> & { name: string; base_url: string; api_key: string }) => Promise<void>;
   testConfig: (configId: string) => Promise<boolean>;
 }
 
@@ -16,6 +17,7 @@ export const useLlmStore = create<LlmStore>((set) => ({
   configs: [],
   loading: false,
   error: null,
+  testing: false,
 
   fetchConfigs: async () => {
     set({ loading: true, error: null });
@@ -29,20 +31,25 @@ export const useLlmStore = create<LlmStore>((set) => ({
   },
 
   saveConfig: async (config) => {
+    set({ loading: true, error: null });
     try {
       await invokeCommand("save_llm_config", { request: config });
+      set({ loading: false });
     } catch (e) {
-      set({ error: String(e) });
+      set({ error: String(e), loading: false });
+      throw e;
     }
   },
 
   testConfig: async (configId: string) => {
+    set({ testing: true, error: null });
     try {
       const result = await invokeCommand<string>("test_llm_config", { config_id: configId });
       const parsed = JSON.parse(result);
+      set({ testing: false });
       return parsed.success === true;
     } catch (e) {
-      set({ error: String(e) });
+      set({ error: String(e), testing: false });
       return false;
     }
   },

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   ArrowLeft,
+  Pause,
   Play,
   Square,
   RotateCcw,
@@ -12,11 +13,18 @@ import {
   Table,
   Inbox,
   Trash2,
+  Gauge,
+  Save,
+  Settings,
+  Shield,
 } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useTaskStore } from "../store/taskStore";
+import { useProxyStore } from "../store/proxyStore";
 import { invokeCommand, listenEvent } from "../services/tauri";
 import type { LogEntry, PaginatedResult, ScanItem, TaskRun } from "../types";
+import ActionNotice, { type ActionNoticeState } from "../components/ActionNotice";
+import { ProxySelect } from "../components/ProxySelect";
 
 const logColors: Record<string, string> = {
   info: "text-cyber-green",
@@ -49,13 +57,18 @@ interface ScanResultsUpdated {
   completed_count: number;
 }
 
+type LogType = "task" | "request";
+
 export default function TaskDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [showLogs, setShowLogs] = useState(true);
+  const [logType, setLogType] = useState<LogType>("task");
   const [logFilter, setLogFilter] = useState<string>("all");
-  const [actionLoading, setActionLoading] = useState<"start" | "stop" | "delete" | null>(null);
+  const [resultFilter, setResultFilter] = useState<"all" | "available" | "unavailable" | "error">("available");
+  const [actionLoading, setActionLoading] = useState<"start" | "pause" | "stop" | "delete" | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<ActionNoticeState | null>(null);
   const [runs, setRuns] = useState<TaskRun[]>([]);
   const [runsLoading, setRunsLoading] = useState(false);
   const [runsError, setRunsError] = useState<string | null>(null);
@@ -65,12 +78,19 @@ export default function TaskDetail() {
   const [results, setResults] = useState<ScanItem[]>([]);
   const [resultsLoading, setResultsLoading] = useState(false);
   const [resultsError, setResultsError] = useState<string | null>(null);
+  const [selectedResultIds, setSelectedResultIds] = useState<number[]>([]);
+  const [retryingResults, setRetryingResults] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [logsLoading, setLogsLoading] = useState(false);
   const [logsError, setLogsError] = useState<string | null>(null);
+  const [settingsConcurrency, setSettingsConcurrency] = useState(50);
+  const [settingsProxyId, setSettingsProxyId] = useState<number | undefined>(undefined);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
   const [liveProgress, setLiveProgress] = useState<ScanProgress | null>(null);
   const resultRefreshTimerRef = useRef<number | null>(null);
-  const { tasks, fetchTasks, startTask, pauseTask, rerunTask, deleteTask } = useTaskStore();
+  const { tasks, fetchTasks, startTask, pauseTask, stopTask, updateTaskSettings, rerunTask, deleteTask } = useTaskStore();
+  const { proxies, fetchProxies } = useProxyStore();
   const effectiveRunId = selectedRunId ?? runs[0]?.id ?? null;
 
   const fetchRuns = useCallback(async () => {
@@ -108,6 +128,7 @@ export default function TaskDetail() {
         request: {
           task_id: id,
           run_id: effectiveRunId,
+          status: resultFilter === "all" ? null : resultFilter,
           limit: 10,
           offset: (resultPage - 1) * 10,
         },
@@ -120,10 +141,10 @@ export default function TaskDetail() {
     } finally {
       setResultsLoading(false);
     }
-  }, [id, effectiveRunId, resultPage]);
+  }, [id, effectiveRunId, resultFilter, resultPage]);
 
   const fetchLogs = useCallback(async () => {
-    if (!id || !effectiveRunId) {
+    if (!id || (logType === "request" && !effectiveRunId)) {
       setLogs([]);
       return;
     }
@@ -134,6 +155,7 @@ export default function TaskDetail() {
         request: {
           task_id: id,
           run_id: effectiveRunId,
+          log_type: logType,
           level: logFilter === "all" ? null : logFilter,
           limit: 200,
           offset: 0,
@@ -145,11 +167,15 @@ export default function TaskDetail() {
     } finally {
       setLogsLoading(false);
     }
-  }, [id, effectiveRunId, logFilter]);
+  }, [id, effectiveRunId, logFilter, logType]);
 
   useEffect(() => {
     if (tasks.length === 0) fetchTasks();
   }, [tasks.length, fetchTasks]);
+
+  useEffect(() => {
+    fetchProxies();
+  }, [fetchProxies]);
 
   useEffect(() => {
     fetchRuns();
@@ -158,7 +184,13 @@ export default function TaskDetail() {
   useEffect(() => {
     setResultPage(1);
     setLiveProgress(null);
+    setSelectedResultIds([]);
   }, [selectedRunId]);
+
+  useEffect(() => {
+    setResultPage(1);
+    setSelectedResultIds([]);
+  }, [resultFilter]);
 
   useEffect(() => {
     fetchResults();
@@ -219,14 +251,16 @@ export default function TaskDetail() {
   useEffect(() => {
     const unlisten = listenEvent<LogEntry>("task-log-created", (log) => {
       if (log.task_id !== id) return;
-      if (effectiveRunId && log.run_id !== effectiveRunId) return;
+      if (log.log_type !== logType) return;
+      if (logType === "request" && effectiveRunId && log.run_id !== effectiveRunId) return;
+      if (logType === "task" && log.run_id && effectiveRunId && log.run_id !== effectiveRunId) return;
       if (logFilter !== "all" && log.level !== logFilter) return;
       setLogs((current) => [log, ...current.filter((entry) => entry.id !== log.id)].slice(0, 200));
     });
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [id, effectiveRunId, logFilter]);
+  }, [id, effectiveRunId, logFilter, logType]);
 
   // Auto-refresh while task is running (fallback for missed events)
   useEffect(() => {
@@ -249,9 +283,27 @@ export default function TaskDetail() {
     () => runs.find((run) => run.id === selectedRunId) ?? runs[0] ?? null,
     [runs, selectedRunId]
   );
-  const availableResults = useMemo(
-    () => results.filter((item) => item.status === "available"),
-    [results]
+  const allCurrentPageSelected = useMemo(
+    () => results.length > 0 && results.every((item) => selectedResultIds.includes(item.id)),
+    [results, selectedResultIds]
+  );
+
+  useEffect(() => {
+    setSelectedResultIds((current) => current.filter((id) => results.some((item) => item.id === id)));
+  }, [results]);
+
+  useEffect(() => {
+    if (!task) return;
+    setSettingsConcurrency(task.concurrency);
+    setSettingsProxyId(task.proxy_id ?? undefined);
+    setSettingsError(null);
+  }, [task?.id, task?.concurrency, task?.proxy_id]);
+
+  const canEditSettings = task?.status === "pending" || task?.status === "paused";
+  const settingsDirty = Boolean(
+    task &&
+      canEditSettings &&
+      (settingsConcurrency !== task.concurrency || (settingsProxyId ?? null) !== task.proxy_id)
   );
 
   const handleStart = async () => {
@@ -269,12 +321,52 @@ export default function TaskDetail() {
     }
   };
 
+  const handleSaveSettings = async () => {
+    if (!task || !canEditSettings) return;
+    setSettingsSaving(true);
+    setSettingsError(null);
+    try {
+      await updateTaskSettings(task.id, settingsConcurrency, settingsProxyId ?? null);
+      await fetchTasks();
+      await fetchLogs();
+      setActionNotice({
+        tone: "info",
+        title: "任务设置已保存",
+        message: `并发量 ${settingsConcurrency}，代理 ${settingsProxyId ? "已选择" : "直连"}`,
+      });
+    } catch (e) {
+      setSettingsError(String(e));
+    } finally {
+      setSettingsSaving(false);
+    }
+  };
+
+  const handlePause = async () => {
+    if (!task) return;
+    setActionError(null);
+    setActionLoading("pause");
+    try {
+      await pauseTask(task.id);
+      await fetchTasks();
+      await fetchRuns();
+      await fetchResults();
+      await fetchLogs();
+    } catch (e) {
+      setActionError(String(e));
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   const handleStop = async () => {
     if (!task) return;
+    const confirmed = window.confirm(`确定停止任务“${task.name}”吗？停止后不能断点续传，只能重新开始。`);
+    if (!confirmed) return;
+
     setActionError(null);
     setActionLoading("stop");
     try {
-      await pauseTask(task.id);
+      await stopTask(task.id);
       await fetchTasks();
       await fetchRuns();
       await fetchResults();
@@ -321,14 +413,43 @@ export default function TaskDetail() {
     }
   };
 
+  const handleRetrySelected = async () => {
+    if (!id || !effectiveRunId || selectedResultIds.length === 0) return;
+    const confirmed = window.confirm(`确定重试已勾选的 ${selectedResultIds.length} 条结果吗？`);
+    if (!confirmed) return;
+
+    setRetryingResults(true);
+    setResultsError(null);
+    try {
+      await invokeCommand<string>("retry_scan_items", {
+        request: {
+          task_id: id,
+          run_id: effectiveRunId,
+          item_ids: selectedResultIds,
+        },
+      });
+      setSelectedResultIds([]);
+      await Promise.all([fetchResults(), fetchLogs(), fetchRuns(), fetchTasks()]);
+    } catch (e) {
+      setResultsError(String(e));
+    } finally {
+      setRetryingResults(false);
+    }
+  };
+
+  const showActionNotice = (notice: ActionNoticeState, action: string) => {
+    console.info(`[ui-action] task-detail-${action}`, notice);
+    setActionNotice(notice);
+  };
+
   if (!task) {
     return (
-      <div className="space-y-6 animate-fade-in max-w-5xl">
+      <div className="page-shell max-w-5xl">
         <div className="flex items-center gap-4">
           <button onClick={() => navigate("/tasks")} className="cyber-btn-icon cyber-btn-ghost">
             <ArrowLeft className="w-4.5 h-4.5" />
           </button>
-          <h1 className="text-xl font-bold text-cyber-text">任务未找到</h1>
+          <h1 className="text-xl font-normal text-cyber-text">任务未找到</h1>
         </div>
         <div className="glass-panel p-12 text-center text-cyber-muted">
           <Inbox className="w-10 h-10 mx-auto mb-3 opacity-40" />
@@ -349,19 +470,27 @@ export default function TaskDetail() {
   };
   const progress = summary.total_count > 0 ? Math.round((summary.completed_count / summary.total_count) * 100) : 0;
   const totalPages = Math.max(1, Math.ceil(resultTotal / 10));
+  const resultFilterOptions: Array<{ key: "all" | "available" | "unavailable" | "error"; label: string }> = [
+    { key: "all", label: "全部" },
+    { key: "available", label: "可用" },
+    { key: "unavailable", label: "已注册" },
+    { key: "error", label: "错误" },
+  ];
 
   return (
-    <div className="space-y-6 animate-fade-in max-w-5xl">
-      {/* Header */}
-      <div className="flex items-center gap-4">
+    <div className="page-shell max-w-5xl">
+      <div className="flex items-start gap-4">
         <button
           onClick={() => navigate("/tasks")}
           className="cyber-btn-icon cyber-btn-ghost"
         >
           <ArrowLeft className="w-4.5 h-4.5" />
         </button>
-        <div className="flex-1">
-          <h1 className="text-xl font-bold text-cyber-text">{task.name}</h1>
+        <div className="min-w-0 flex-1">
+          <div className="eyebrow mb-2">TASK DETAIL</div>
+          <h1 className="truncate text-3xl font-normal leading-none text-cyber-text" title={task.name}>
+            {task.name}
+          </h1>
           <div className="flex items-center gap-2 mt-1 flex-wrap">
             {task.tlds.map((tld) => (
               <span key={tld} className="badge-neutral">{tld}</span>
@@ -369,7 +498,7 @@ export default function TaskDetail() {
             <span className="text-xs text-cyber-muted-dim font-mono">ID: {id}</span>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap justify-end">
           {(task.status === "pending" || task.status === "paused") && (
             <button
               className="cyber-btn-primary cyber-btn-sm"
@@ -382,10 +511,19 @@ export default function TaskDetail() {
           {task.status === "running" && (
             <button
               className="cyber-btn-secondary cyber-btn-sm"
+              onClick={handlePause}
+              disabled={actionLoading !== null}
+            >
+              <Pause className="w-3.5 h-3.5" /> {actionLoading === "pause" ? "暂停中..." : "暂停任务"}
+            </button>
+          )}
+          {(task.status === "running" || task.status === "paused") && (
+            <button
+              className="cyber-btn-secondary cyber-btn-sm text-cyber-red border-cyber-red/25 hover:border-cyber-red/45 hover:text-cyber-red"
               onClick={handleStop}
               disabled={actionLoading !== null}
             >
-              <Square className="w-3.5 h-3.5" /> {actionLoading === "stop" ? "停止中..." : "停止"}
+              <Square className="w-3.5 h-3.5" /> {actionLoading === "stop" ? "停止中..." : "停止任务"}
             </button>
           )}
           {task.status !== "running" && runs.length > 0 && (
@@ -394,25 +532,120 @@ export default function TaskDetail() {
               onClick={handleRerun}
               disabled={actionLoading !== null}
             >
-              <RotateCcw className="w-3.5 h-3.5" /> {actionLoading === "start" ? "重新运行中..." : "Rerun"}
+              <RotateCcw className="w-3.5 h-3.5" /> {actionLoading === "start" ? "重新开始中..." : "重新开始"}
             </button>
           )}
           <button
-            className="cyber-btn-secondary cyber-btn-sm text-cyber-red border-cyber-red/20 hover:border-cyber-red/40 hover:text-cyber-red"
+            className="cyber-btn-secondary cyber-btn-sm text-cyber-red border-cyber-red/25 hover:border-cyber-red/45 hover:text-cyber-red"
             onClick={handleDelete}
             disabled={actionLoading !== null}
           >
             <Trash2 className="w-3.5 h-3.5" /> {actionLoading === "delete" ? "删除中..." : "删除"}
           </button>
-          <button className="cyber-btn-secondary cyber-btn-sm"><Download className="w-3.5 h-3.5" /> 导出</button>
-          <button className="cyber-btn-secondary cyber-btn-sm"><Cpu className="w-3.5 h-3.5" /> 向量化</button>
-          <button className="cyber-btn-secondary cyber-btn-sm"><Filter className="w-3.5 h-3.5" /> 筛选</button>
+          <button
+            className="cyber-btn-secondary cyber-btn-sm"
+            onClick={() =>
+              showActionNotice(
+                {
+                  tone: "warning",
+                  title: "导出需要选择输出路径",
+                  message: "后端 export_results 已存在，但当前前端还没有接入文件保存对话框，因此没有直接写文件。请先使用结果表查看和重试结果。",
+                },
+                "export"
+              )
+            }
+          >
+            <Download className="w-3.5 h-3.5" /> 导出
+          </button>
+          <button
+            className="cyber-btn-secondary cyber-btn-sm"
+            onClick={() => {
+              console.info("[ui-action] task-detail-vectorize", { task_id: task.id });
+              navigate("/vectorize");
+            }}
+          >
+            <Cpu className="w-3.5 h-3.5" /> 向量化
+          </button>
+          <button
+            className="cyber-btn-secondary cyber-btn-sm"
+            onClick={() => {
+              console.info("[ui-action] task-detail-filter", { task_id: task.id });
+              navigate("/filter");
+            }}
+          >
+            <Filter className="w-3.5 h-3.5" /> 筛选
+          </button>
         </div>
       </div>
 
       {actionError && (
         <div className="glass-panel px-4 py-3 text-sm text-cyber-red">
           {actionError}
+        </div>
+      )}
+      {actionNotice && <ActionNotice notice={actionNotice} onClose={() => setActionNotice(null)} />}
+
+      {canEditSettings && (
+        <div className="glass-panel p-4 space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="section-title m-0">
+              <Settings className="w-4 h-4 text-cyber-text-secondary" />
+              任务设置
+            </h2>
+            <button
+              className="cyber-btn-primary cyber-btn-sm"
+              disabled={!settingsDirty || settingsSaving}
+              onClick={handleSaveSettings}
+            >
+              <Save className="w-3.5 h-3.5" />
+              {settingsSaving ? "保存中..." : "保存设置"}
+            </button>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <div>
+              <label className="flex items-center gap-2 text-xs text-cyber-muted mb-2">
+                <Gauge className="w-3.5 h-3.5" />
+                并发量
+                <span className="text-cyber-green font-mono font-bold">{settingsConcurrency}</span>
+              </label>
+              <div className="flex items-center gap-3">
+                <input
+                  type="range"
+                  min={1}
+                  max={500}
+                  value={settingsConcurrency}
+                  onChange={(event) => setSettingsConcurrency(Number(event.target.value))}
+                  className="w-full accent-cyber-green"
+                />
+                <input
+                  type="number"
+                  min={1}
+                  max={500}
+                  value={settingsConcurrency}
+                  onChange={(event) =>
+                    setSettingsConcurrency(Math.min(500, Math.max(1, Number(event.target.value) || 1)))
+                  }
+                  className="cyber-input h-9 w-24 text-sm"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="flex items-center gap-2 text-xs text-cyber-muted mb-2">
+                <Shield className="w-3.5 h-3.5" />
+                代理
+              </label>
+              <ProxySelect
+                proxies={proxies}
+                selectedProxyId={settingsProxyId}
+                onChange={setSettingsProxyId}
+                hasWarning={Boolean(
+                  settingsProxyId &&
+                    proxies.find((proxy) => proxy.id === settingsProxyId)?.status !== "available"
+                )}
+              />
+            </div>
+          </div>
+          {settingsError && <div className="text-sm text-cyber-red">{settingsError}</div>}
         </div>
       )}
 
@@ -448,47 +681,40 @@ export default function TaskDetail() {
         )}
       </div>
 
-      {/* Progress Section */}
       <div className="grid grid-cols-[200px_1fr] gap-4 glass-panel p-5 items-center">
         <div className="relative w-32 h-32 mx-auto shrink-0">
           <svg className="w-full h-full -rotate-90" viewBox="0 0 128 128">
             <circle cx="64" cy="64" r="56" fill="none" stroke="#252D3A" strokeWidth="8" />
             <circle
               cx="64" cy="64" r="56" fill="none"
-              stroke="url(#progressGrad)" strokeWidth="8"
+              stroke="#ffffff" strokeWidth="8"
               strokeLinecap="round"
               strokeDasharray={`${(progress / 100) * 351.86} 351.86`}
               style={{ transition: "stroke-dasharray 700ms ease-out" }}
             />
-            <defs>
-              <linearGradient id="progressGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-                <stop offset="0%" stopColor="#00E5A0" />
-                <stop offset="100%" stopColor="#00C9DB" />
-              </linearGradient>
-            </defs>
           </svg>
           <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <span className="text-2xl font-bold neon-text tabular-nums">{progress}%</span>
+            <span className="text-2xl font-normal text-white tabular-nums">{progress}%</span>
             <span className="text-[10px] text-cyber-muted">进度</span>
           </div>
         </div>
 
         <div className="grid grid-cols-3 gap-4">
-          <div className="rounded-xl bg-cyber-bg-elevated/60 border border-cyber-border/20 p-4 space-y-1">
+          <div className="metric-tile space-y-1">
             <p className="text-xs text-cyber-muted">已完成</p>
-            <p className="text-xl font-bold text-cyber-text tabular-nums">{summary.completed_count.toLocaleString()}</p>
+            <p className="text-xl font-normal text-cyber-text tabular-nums">{summary.completed_count.toLocaleString()}</p>
             <p className="text-[10px] text-cyber-muted-dim font-mono tabular-nums">/ {summary.total_count.toLocaleString()}</p>
           </div>
-          <div className="rounded-xl bg-cyber-bg-elevated/60 border border-cyber-border/20 p-4 space-y-1">
+          <div className="metric-tile space-y-1">
             <p className="text-xs text-cyber-muted">可用域名</p>
-            <p className="text-xl font-bold text-cyber-green tabular-nums">{summary.available_count.toLocaleString()}</p>
+            <p className="text-xl font-normal text-cyber-green tabular-nums">{summary.available_count.toLocaleString()}</p>
             <p className="text-[10px] text-cyber-muted-dim">
               {summary.completed_count > 0 ? ((summary.available_count / summary.completed_count) * 100).toFixed(1) : "0.0"}% 可用率
             </p>
           </div>
-          <div className="rounded-xl bg-cyber-bg-elevated/60 border border-cyber-border/20 p-4 space-y-1">
+          <div className="metric-tile space-y-1">
             <p className="text-xs text-cyber-muted">错误数</p>
-            <p className="text-xl font-bold text-cyber-red tabular-nums">{summary.error_count}</p>
+            <p className="text-xl font-normal text-cyber-red tabular-nums">{summary.error_count}</p>
             <p className="text-[10px] text-cyber-muted-dim">
               {summary.completed_count > 0 ? ((summary.error_count / summary.completed_count) * 100).toFixed(2) : "0.00"}% 错误率
             </p>
@@ -496,14 +722,39 @@ export default function TaskDetail() {
         </div>
       </div>
 
-      {/* Results Table */}
       <div className="glass-panel overflow-hidden">
         <div className="px-5 py-3.5 border-b border-cyber-border/30 flex items-center justify-between">
           <h2 className="section-title m-0">
             <Table className="w-4 h-4 text-cyber-green" /> 扫描结果
           </h2>
-          <div className="text-xs text-cyber-muted-dim">
-            第 {resultPage}/{totalPages} 页，共 {resultTotal} 条
+          <div className="flex items-center gap-3">
+            <div className="flex bg-cyber-surface rounded-md p-0.5 text-xs">
+              {resultFilterOptions.map((option) => (
+                <button
+                  key={option.key}
+                  onClick={() => setResultFilter(option.key)}
+                  className={`px-2.5 py-1 rounded-md transition-all ${
+                    resultFilter === option.key
+                      ? "bg-white/[0.08] text-white"
+                      : "text-cyber-muted-dim hover:text-cyber-text-secondary"
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <button
+              className="cyber-btn-secondary cyber-btn-sm"
+              disabled={selectedResultIds.length === 0 || retryingResults}
+              onClick={handleRetrySelected}
+            >
+              <RotateCcw className={`w-3.5 h-3.5 ${retryingResults ? "animate-spin" : ""}`} />
+              {retryingResults ? "重试中..." : `重试选中${selectedResultIds.length > 0 ? ` (${selectedResultIds.length})` : ""}`}
+            </button>
+            <div className="grid w-[30ch] shrink-0 grid-cols-[16ch_12ch] gap-2 text-right text-xs tabular-nums text-cyber-muted-dim">
+              <span className="whitespace-nowrap">第 {resultPage}/{totalPages} 页</span>
+              <span className="whitespace-nowrap">共 {resultTotal} 条</span>
+            </div>
           </div>
         </div>
         {resultsError ? (
@@ -524,6 +775,19 @@ export default function TaskDetail() {
             <table className="w-full text-sm">
               <thead className="bg-cyber-bg-elevated/70 text-cyber-muted-dim">
                 <tr className="text-left">
+                  <th className="px-3 py-3 font-medium w-10">
+                    <input
+                      type="checkbox"
+                      checked={allCurrentPageSelected}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedResultIds(results.map((item) => item.id));
+                        } else {
+                          setSelectedResultIds([]);
+                        }
+                      }}
+                    />
+                  </th>
                   <th className="px-5 py-3 font-medium">域名</th>
                   <th className="px-3 py-3 font-medium">状态</th>
                   <th className="px-3 py-3 font-medium">方式</th>
@@ -536,6 +800,19 @@ export default function TaskDetail() {
                   const status = getResultStatus(item);
                   return (
                     <tr key={item.id} className="hover:bg-cyber-bg-elevated/30">
+                      <td className="px-3 py-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedResultIds.includes(item.id)}
+                          onChange={(e) => {
+                            setSelectedResultIds((current) =>
+                              e.target.checked
+                                ? [...current, item.id]
+                                : current.filter((id) => id !== item.id)
+                            );
+                          }}
+                        />
+                      </td>
                       <td className="px-5 py-3">
                         <div className="font-mono text-cyber-text">{item.domain}</div>
                         {item.error_message && (
@@ -564,19 +841,26 @@ export default function TaskDetail() {
           </div>
         )}
         {resultTotal > 0 && (
-          <div className="px-5 py-3 border-t border-cyber-border/20 flex items-center justify-between text-xs text-cyber-muted-dim">
-            <span>每页 10 条，按最新完成结果排序</span>
-            <div className="flex items-center gap-2">
+          <div className="px-5 py-3 border-t border-cyber-border/20 flex flex-col gap-3 text-xs text-cyber-muted-dim sm:flex-row sm:items-center sm:justify-between">
+            <span>默认显示可用结果；支持全部 / 可用 / 已注册 / 错误筛选，每页 10 条</span>
+            <div className="grid w-[22rem] shrink-0 grid-cols-[5.5rem_10rem_5.5rem] items-center gap-2">
               <button
-                className="cyber-btn-secondary cyber-btn-sm"
+                className="cyber-btn-secondary cyber-btn-sm w-full justify-center"
                 disabled={resultPage <= 1}
                 onClick={() => setResultPage((page) => Math.max(1, page - 1))}
               >
                 上一页
               </button>
-              <span className="font-mono">{resultPage} / {totalPages}</span>
+              <span
+                className="inline-flex h-8 items-center justify-center rounded-md border border-cyber-border/30 bg-cyber-bg-elevated/40 px-2 font-mono tabular-nums text-cyber-text-secondary"
+                aria-label={`第 ${resultPage} 页，共 ${totalPages} 页`}
+              >
+                <span className="inline-block w-[5ch] text-right">{resultPage}</span>
+                <span className="px-1 text-cyber-muted-dim">/</span>
+                <span className="inline-block w-[5ch] text-left">{totalPages}</span>
+              </span>
               <button
-                className="cyber-btn-secondary cyber-btn-sm"
+                className="cyber-btn-secondary cyber-btn-sm w-full justify-center"
                 disabled={resultPage >= totalPages}
                 onClick={() => setResultPage((page) => Math.min(totalPages, page + 1))}
               >
@@ -587,7 +871,6 @@ export default function TaskDetail() {
         )}
       </div>
 
-      {/* Log Panel */}
       <div className="glass-panel overflow-hidden">
         <div
           className="px-5 py-3.5 border-b border-cyber-border/30 flex items-center justify-between cursor-pointer hover:bg-cyber-card/20 transition-colors"
@@ -595,16 +878,37 @@ export default function TaskDetail() {
         >
           <h2 className="section-title m-0">
             <Terminal className="w-4 h-4 text-cyber-green" />
-            实时日志
+            日志
           </h2>
           <div className="flex items-center gap-3">
-            <div className="hidden sm:flex bg-cyber-surface rounded-lg p-0.5 text-xs">
+            <div className="hidden sm:flex bg-cyber-surface rounded-md p-0.5 text-xs">
+              {([
+                ["task", "任务日志"],
+                ["request", "请求日志"],
+              ] as const).map(([type, label]) => (
+                <button
+                  key={type}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setLogType(type);
+                  }}
+                  className={`px-2.5 py-1 rounded-md transition-all ${
+                    logType === type
+                      ? "bg-white/[0.08] text-white"
+                      : "text-cyber-muted-dim hover:text-cyber-text-secondary"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="hidden sm:flex bg-cyber-surface rounded-md p-0.5 text-xs">
               {(["all", "info", "warn", "error"] as const).map((lvl) => (
                 <button
                   key={lvl}
                   onClick={(e) => { e.stopPropagation(); setLogFilter(lvl); }}
                   className={`px-2.5 py-1 rounded-md transition-all ${
-                    logFilter === lvl ? "bg-cyber-green/15 text-cyber-green" : "text-cyber-muted-dim hover:text-cyber-text-secondary"
+                    logFilter === lvl ? "bg-white/[0.08] text-white" : "text-cyber-muted-dim hover:text-cyber-text-secondary"
                   }`}
                 >
                   {lvl === "all" ? "全部" : lvl.toUpperCase()}
@@ -626,7 +930,7 @@ export default function TaskDetail() {
             ) : logs.length === 0 ? (
               <div className="text-center py-8 text-cyber-muted">
                 <Terminal className="w-8 h-8 mx-auto mb-2 opacity-30" />
-                <p className="text-xs">暂无运行日志</p>
+                <p className="text-xs">暂无{logType === "task" ? "任务日志" : "请求日志"}</p>
               </div>
             ) : (
               <div className="divide-y divide-cyber-border/10">
@@ -649,9 +953,9 @@ export default function TaskDetail() {
         )}
       </div>
 
-      {availableResults.length > 0 && (
+      {summary.available_count > 0 && (
         <div className="text-xs text-cyber-muted-dim px-1">
-          当前页展示最近完成的 10 条结果；该运行累计已确认 {summary.available_count} 个可用域名。
+          当前运行累计已确认 {summary.available_count} 个可用域名；勾选多条结果后可发起重试并刷新结果。
         </div>
       )}
     </div>

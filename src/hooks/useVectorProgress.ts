@@ -4,12 +4,19 @@ import { listenEvent } from "../services/tauri";
 import type { GpuBackend } from "../types";
 
 interface VectorProgress {
+  run_id: string | null;
   task_id: string;
   total: number;
   processed: number;
   percentage: number;
   backend: GpuBackend;
+  speed_per_sec: number | null;
   estimated_remaining_secs: number | null;
+  status: "idle" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
+  message: string | null;
+  updated_at: string;
+  started_at: string | null;
+  finished_at: string | null;
 }
 
 /**

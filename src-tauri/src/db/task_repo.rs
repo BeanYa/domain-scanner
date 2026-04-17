@@ -80,6 +80,19 @@ impl<'a> TaskRepo<'a> {
         Ok(())
     }
 
+    pub fn update_settings(
+        &self,
+        id: &str,
+        concurrency: i64,
+        proxy_id: Option<i64>,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE tasks SET concurrency = ?1, proxy_id = ?2, updated_at = CURRENT_TIMESTAMP WHERE id = ?3",
+            rusqlite::params![concurrency, proxy_id, id],
+        )?;
+        Ok(())
+    }
+
     pub fn reset_for_rerun(&self, id: &str) -> Result<(), rusqlite::Error> {
         self.conn.execute(
             "UPDATE tasks
@@ -332,6 +345,18 @@ mod tests {
         assert_eq!(fetched.completed_index, 100);
         assert_eq!(fetched.available_count, 30);
         assert_eq!(fetched.error_count, 2);
+    }
+
+    #[test]
+    fn test_update_settings() {
+        let (conn, _temp) = setup();
+        let repo = TaskRepo::new(&conn);
+        let task = make_test_task("t1", "sig1", vec![".com"]);
+        repo.create(&task).unwrap();
+        repo.update_settings("t1", 128, Some(42)).unwrap();
+        let fetched = repo.get_by_id("t1").unwrap().unwrap();
+        assert_eq!(fetched.concurrency, 128);
+        assert_eq!(fetched.proxy_id, Some(42));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use crate::models::proxy::{ProxyConfig, ProxyType};
+use crate::models::proxy::{ProxyConfig, ProxyStatus, ProxyType};
 
 pub struct ProxyRepo<'a> {
     pub conn: &'a rusqlite::Connection,
@@ -11,12 +11,15 @@ impl<'a> ProxyRepo<'a> {
 
     pub fn create(&self, proxy: &ProxyConfig) -> Result<i64, rusqlite::Error> {
         self.conn.execute(
-            "INSERT INTO proxies (name, url, proxy_type, username, password, is_active) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO proxies (name, url, proxy_type, username, password, is_active, status, last_checked_at, last_error) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             rusqlite::params![
                 proxy.name, proxy.url,
                 serde_json::to_string(&proxy.proxy_type).unwrap(),
                 proxy.username, proxy.password,
-                proxy.is_active as i32
+                proxy.is_active as i32,
+                serde_json::to_string(&proxy.status).unwrap(),
+                proxy.last_checked_at,
+                proxy.last_error
             ],
         )?;
         Ok(self.conn.last_insert_rowid())
@@ -24,7 +27,7 @@ impl<'a> ProxyRepo<'a> {
 
     pub fn get_by_id(&self, id: i64) -> Result<Option<ProxyConfig>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, url, proxy_type, username, password, is_active FROM proxies WHERE id = ?1"
+            "SELECT id, name, url, proxy_type, username, password, is_active, status, last_checked_at, last_error FROM proxies WHERE id = ?1"
         )?;
         let mut rows = stmt.query([id])?;
         match rows.next()? {
@@ -35,9 +38,9 @@ impl<'a> ProxyRepo<'a> {
 
     pub fn list(&self, active_only: bool) -> Result<Vec<ProxyConfig>, rusqlite::Error> {
         let sql = if active_only {
-            "SELECT id, name, url, proxy_type, username, password, is_active FROM proxies WHERE is_active = 1 ORDER BY id"
+            "SELECT id, name, url, proxy_type, username, password, is_active, status, last_checked_at, last_error FROM proxies WHERE is_active = 1 ORDER BY id"
         } else {
-            "SELECT id, name, url, proxy_type, username, password, is_active FROM proxies ORDER BY id"
+            "SELECT id, name, url, proxy_type, username, password, is_active, status, last_checked_at, last_error FROM proxies ORDER BY id"
         };
         let mut stmt = self.conn.prepare(sql)?;
         let proxies = stmt
@@ -49,21 +52,38 @@ impl<'a> ProxyRepo<'a> {
 
     pub fn update(&self, proxy: &ProxyConfig) -> Result<(), rusqlite::Error> {
         self.conn.execute(
-            "UPDATE proxies SET name = ?1, url = ?2, proxy_type = ?3, username = ?4, password = ?5, is_active = ?6 WHERE id = ?7",
+            "UPDATE proxies SET name = ?1, url = ?2, proxy_type = ?3, username = ?4, password = ?5, is_active = ?6, status = ?7, last_checked_at = ?8, last_error = ?9 WHERE id = ?10",
             rusqlite::params![
                 proxy.name, proxy.url,
                 serde_json::to_string(&proxy.proxy_type).unwrap(),
                 proxy.username, proxy.password,
-                proxy.is_active as i32, proxy.id
+                proxy.is_active as i32,
+                serde_json::to_string(&proxy.status).unwrap(),
+                proxy.last_checked_at,
+                proxy.last_error,
+                proxy.id
             ],
         )?;
         Ok(())
     }
 
-    pub fn set_active(&self, id: i64, active: bool) -> Result<(), rusqlite::Error> {
+    pub fn update_health(
+        &self,
+        id: i64,
+        status: &ProxyStatus,
+        active: bool,
+        last_checked_at: Option<&str>,
+        last_error: Option<&str>,
+    ) -> Result<(), rusqlite::Error> {
         self.conn.execute(
-            "UPDATE proxies SET is_active = ?1 WHERE id = ?2",
-            rusqlite::params![active as i32, id],
+            "UPDATE proxies SET is_active = ?1, status = ?2, last_checked_at = ?3, last_error = ?4 WHERE id = ?5",
+            rusqlite::params![
+                active as i32,
+                serde_json::to_string(status).unwrap(),
+                last_checked_at,
+                last_error,
+                id
+            ],
         )?;
         Ok(())
     }
@@ -84,6 +104,9 @@ impl<'a> ProxyRepo<'a> {
             username: row.get(4)?,
             password: row.get(5)?,
             is_active: is_active != 0,
+            status: serde_json::from_str(&row.get::<_, String>(7)?).unwrap_or(ProxyStatus::Pending),
+            last_checked_at: row.get(8)?,
+            last_error: row.get(9)?,
         })
     }
 }
@@ -111,6 +134,13 @@ mod tests {
             username: None,
             password: None,
             is_active: active,
+            status: if active {
+                ProxyStatus::Available
+            } else {
+                ProxyStatus::Pending
+            },
+            last_checked_at: None,
+            last_error: None,
         }
     }
 
@@ -172,9 +202,18 @@ mod tests {
         let id = repo
             .create(&make_proxy(0, "http://p1:8080", ProxyType::Http, true))
             .unwrap();
-        repo.set_active(id, false).unwrap();
+        repo.update_health(
+            id,
+            &ProxyStatus::Unavailable,
+            false,
+            Some("2026-04-16T00:00:00Z"),
+            Some("timeout"),
+        )
+        .unwrap();
         let fetched = repo.get_by_id(id).unwrap().unwrap();
         assert!(!fetched.is_active);
+        assert_eq!(fetched.status, ProxyStatus::Unavailable);
+        assert_eq!(fetched.last_error.as_deref(), Some("timeout"));
     }
 
     #[test]

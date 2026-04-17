@@ -33,6 +33,8 @@ pub struct ChatChoice {
 pub struct EmbeddingRequest {
     pub model: String,
     pub input: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dimensions: Option<i64>,
 }
 
 /// Embedding response
@@ -66,7 +68,10 @@ impl LlmClient {
 
     /// Send a chat completion request
     pub async fn chat(&self, messages: Vec<ChatMessage>) -> Result<String, String> {
-        let url = format!("{}chat/completions", self.config.base_url);
+        let url = format!(
+            "{}chat/completions",
+            normalize_base_url(&self.config.base_url)
+        );
         let request = ChatRequest {
             model: self.config.model.clone(),
             messages,
@@ -110,10 +115,11 @@ impl LlmClient {
             .clone()
             .ok_or_else(|| "No embedding model configured".to_string())?;
 
-        let url = format!("{}embeddings", self.config.base_url);
+        let url = format!("{}embeddings", normalize_base_url(&self.config.base_url));
         let request = EmbeddingRequest {
             model: embedding_model,
             input: texts,
+            dimensions: Some(self.config.embedding_dim),
         };
 
         let response = self
@@ -144,7 +150,25 @@ impl LlmClient {
             .collect())
     }
 
-    /// Test the connection to the LLM API
+    /// Test the configured embedding API.
+    pub async fn test_embedding_connection(&self) -> Result<usize, String> {
+        let embeddings = self
+            .embed(vec!["domain scanner embedding test".to_string()])
+            .await?;
+        let first = embeddings
+            .first()
+            .ok_or_else(|| "Embedding API returned no vectors".to_string())?;
+        if first.len() != self.config.embedding_dim as usize {
+            return Err(format!(
+                "Embedding API returned {} dimensions, config expects {}",
+                first.len(),
+                self.config.embedding_dim
+            ));
+        }
+        Ok(first.len())
+    }
+
+    /// Test the connection to the chat API.
     pub async fn test_connection(&self) -> Result<(), String> {
         let messages = vec![ChatMessage {
             role: "user".to_string(),
@@ -157,6 +181,15 @@ impl LlmClient {
     /// Get the config
     pub fn config(&self) -> &LlmConfig {
         &self.config
+    }
+}
+
+fn normalize_base_url(base_url: &str) -> String {
+    let trimmed = base_url.trim();
+    if trimmed.ends_with('/') {
+        trimmed.to_string()
+    } else {
+        format!("{}/", trimmed)
     }
 }
 
@@ -206,6 +239,18 @@ mod tests {
         let response: EmbeddingResponse = serde_json::from_str(json).unwrap();
         assert_eq!(response.data[0].embedding.len(), 3);
         assert!((response.data[0].embedding[0] - 0.1).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_normalize_base_url() {
+        assert_eq!(
+            normalize_base_url("https://api.example.com/v1"),
+            "https://api.example.com/v1/"
+        );
+        assert_eq!(
+            normalize_base_url("https://api.example.com/v1/"),
+            "https://api.example.com/v1/"
+        );
     }
 
     #[test]

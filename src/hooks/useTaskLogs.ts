@@ -5,16 +5,18 @@ import type { LogEntry } from "../types";
 
 interface UseTaskLogsOptions {
   taskId: string;
+  logType?: "task" | "request";
   level?: string;
   pageSize?: number;
   autoRefresh?: boolean;
+  enabled?: boolean;
 }
 
 /**
  * Hook for fetching and streaming task logs
  */
 export function useTaskLogs(options: UseTaskLogsOptions) {
-  const { taskId, level, pageSize = 100, autoRefresh = true } = options;
+  const { taskId, logType = "task", level, pageSize = 100, autoRefresh = true, enabled = true } = options;
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [offset, setOffset] = useState(0);
@@ -22,11 +24,13 @@ export function useTaskLogs(options: UseTaskLogsOptions) {
 
   const fetchLogs = useCallback(
     async (newOffset?: number) => {
+      if (!enabled || !taskId) return [];
       setLoading(true);
       try {
         const result = await invokeCommand<string>("get_logs", {
           request: {
             task_id: taskId,
+            log_type: logType,
             level: level || null,
             limit: pageSize,
             offset: newOffset ?? offset,
@@ -44,7 +48,7 @@ export function useTaskLogs(options: UseTaskLogsOptions) {
         setLoading(false);
       }
     },
-    [taskId, level, pageSize, offset]
+    [enabled, taskId, logType, level, pageSize, offset]
   );
 
   const loadMore = useCallback(async () => {
@@ -55,21 +59,26 @@ export function useTaskLogs(options: UseTaskLogsOptions) {
 
   // Initial fetch
   useEffect(() => {
+    if (!enabled || !taskId) {
+      setLogs([]);
+      return;
+    }
     const load = async () => {
       const fetched = await fetchLogs(0);
       setLogs(fetched);
     };
     load();
-  }, [taskId, level]);
+  }, [enabled, taskId, logType, level]);
 
   // Listen for real-time log events
   useEffect(() => {
-    if (!autoRefresh) return;
+    if (!enabled || !taskId || !autoRefresh) return;
 
     const setup = async () => {
       unlistenRef.current = await listenEvent<LogEntry>(
         `task-log-${taskId}`,
         (log) => {
+          if (log.log_type !== logType) return;
           setLogs((prev) => [log, ...prev]);
         }
       );
@@ -80,7 +89,7 @@ export function useTaskLogs(options: UseTaskLogsOptions) {
     return () => {
       unlistenRef.current?.();
     };
-  }, [taskId, autoRefresh]);
+  }, [enabled, taskId, logType, autoRefresh]);
 
   return { logs, loading, fetchLogs, loadMore };
 }

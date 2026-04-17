@@ -9,3 +9,4 @@ pub mod scan_item_repo;
 pub mod task_repo;
 pub mod task_run_repo;
 pub mod vector_repo;
+pub mod vectorize_run_repo;
