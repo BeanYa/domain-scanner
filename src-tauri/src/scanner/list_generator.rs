@@ -20,6 +20,7 @@ pub struct ListGenerator {
     _mode: ScanMode,
     tlds: Vec<String>,
     current_index: i64,
+    end_index: i64,
     total_count: i64,
     batch_size: usize,
     prefix_source: PrefixSource,
@@ -34,6 +35,7 @@ impl ListGenerator {
             _mode: mode,
             tlds,
             current_index: 0,
+            end_index: total_count,
             total_count,
             batch_size: 5000,
             prefix_source,
@@ -48,7 +50,15 @@ impl ListGenerator {
 
     /// Resume from a specific index (for checkpoint resume)
     pub fn with_start_index(mut self, index: i64) -> Self {
-        self.current_index = index.max(0).min(self.total_count);
+        self.current_index = index.max(0).min(self.end_index);
+        self
+    }
+
+    /// Limit generation to [start_index, end_index). Used by scan batch execution.
+    pub fn with_range(mut self, start_index: i64, end_index: i64) -> Self {
+        let end_index = end_index.max(0).min(self.total_count);
+        self.end_index = end_index;
+        self.current_index = start_index.max(0).min(end_index);
         self
     }
 
@@ -74,15 +84,12 @@ impl ListGenerator {
 
     /// Check if there are more candidates
     pub fn has_more(&self) -> bool {
-        self.current_index < self.total_count
+        self.current_index < self.end_index
     }
 
     /// Get the next batch of domain candidates
     pub fn next_batch(&mut self) -> Vec<DomainCandidate> {
-        let end = std::cmp::min(
-            self.current_index + self.batch_size as i64,
-            self.total_count,
-        );
+        let end = std::cmp::min(self.current_index + self.batch_size as i64, self.end_index);
         let tld_count = self.tld_count() as i64;
 
         let batch: Vec<DomainCandidate> = (self.current_index..end)
@@ -384,6 +391,23 @@ mod tests {
         assert_eq!(gen.current_index(), 200);
         let batch = gen.next_batch();
         assert_eq!(batch[0].index, 200);
+    }
+
+    #[test]
+    fn test_generate_range() {
+        let mode = ScanMode::Manual {
+            domains: vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()],
+        };
+        let mut gen = ListGenerator::new(mode, vec![".com".to_string(), ".net".to_string()])
+            .with_batch_size(10)
+            .with_range(2, 5);
+        let batch = gen.next_batch();
+        assert_eq!(batch.len(), 3);
+        assert_eq!(batch[0].index, 2);
+        assert_eq!(batch[0].domain, "beta.com");
+        assert_eq!(batch[2].index, 4);
+        assert_eq!(batch[2].domain, "gamma.com");
+        assert!(!gen.has_more());
     }
 
     #[test]

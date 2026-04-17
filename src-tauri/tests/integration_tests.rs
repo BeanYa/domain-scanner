@@ -318,6 +318,8 @@ fn test_scan_items_batch_and_pagination() {
             id: 0,
             task_id: "task-items".to_string(),
             run_id: "run-1".to_string(),
+            batch_id: None,
+            worker_id: None,
             domain: format!(
                 "{}{}.com",
                 (b'a' + (i % 26) as u8) as char,

@@ -174,6 +174,8 @@ mod tests {
             id: 0,
             task_id: "task1".to_string(),
             run_id: "run1".to_string(),
+            batch_id: None,
+            worker_id: None,
             domain: domain.to_string(),
             tld: ".com".to_string(),
             item_index: 0,

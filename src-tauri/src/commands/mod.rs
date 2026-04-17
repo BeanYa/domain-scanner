@@ -8,6 +8,7 @@ pub mod proxy_cmds;
 pub mod scan_cmds;
 pub mod task_cmds;
 pub mod vector_cmds;
+pub mod worker_cmds;
 
 pub use batch_cmds::*;
 pub use export_cmds::*;
@@ -19,3 +20,4 @@ pub use proxy_cmds::*;
 pub use scan_cmds::*;
 pub use task_cmds::*;
 pub use vector_cmds::*;
+pub use worker_cmds::*;

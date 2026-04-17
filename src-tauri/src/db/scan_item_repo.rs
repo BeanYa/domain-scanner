@@ -12,10 +12,10 @@ impl<'a> ScanItemRepo<'a> {
     /// Insert a single scan item
     pub fn create(&self, item: &ScanItem) -> Result<i64, rusqlite::Error> {
         self.conn.execute(
-            "INSERT INTO scan_items (task_id, run_id, domain, tld, item_index, status, is_available, query_method, response_time_ms, error_message, checked_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT INTO scan_items (task_id, run_id, batch_id, worker_id, domain, tld, item_index, status, is_available, query_method, response_time_ms, error_message, checked_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             rusqlite::params![
-                item.task_id, item.run_id, item.domain, item.tld, item.item_index,
+                item.task_id, item.run_id, item.batch_id, item.worker_id, item.domain, item.tld, item.item_index,
                 serde_json::to_string(&item.status).unwrap(),
                 item.is_available, item.query_method, item.response_time_ms,
                 item.error_message, item.checked_at
@@ -30,10 +30,10 @@ impl<'a> ScanItemRepo<'a> {
         let mut count = 0;
         for item in items {
             tx.execute(
-                "INSERT INTO scan_items (task_id, run_id, domain, tld, item_index, status, is_available, query_method, response_time_ms, error_message, checked_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                "INSERT INTO scan_items (task_id, run_id, batch_id, worker_id, domain, tld, item_index, status, is_available, query_method, response_time_ms, error_message, checked_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                 rusqlite::params![
-                    item.task_id, item.run_id, item.domain, item.tld, item.item_index,
+                    item.task_id, item.run_id, item.batch_id, item.worker_id, item.domain, item.tld, item.item_index,
                     serde_json::to_string(&item.status).unwrap(),
                     item.is_available, item.query_method, item.response_time_ms,
                     item.error_message, item.checked_at
@@ -66,7 +66,7 @@ impl<'a> ScanItemRepo<'a> {
     /// Get scan item by ID
     pub fn get_by_id(&self, id: i64) -> Result<Option<ScanItem>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, task_id, run_id, domain, tld, item_index, status, is_available, query_method, response_time_ms, error_message, checked_at FROM scan_items WHERE id = ?1"
+            "SELECT id, task_id, run_id, batch_id, worker_id, domain, tld, item_index, status, is_available, query_method, response_time_ms, error_message, checked_at FROM scan_items WHERE id = ?1"
         )?;
         let mut rows = stmt.query([id])?;
         match rows.next()? {
@@ -85,7 +85,7 @@ impl<'a> ScanItemRepo<'a> {
         offset: i64,
     ) -> Result<Vec<ScanItem>, rusqlite::Error> {
         let mut sql = String::from(
-            "SELECT id, task_id, run_id, domain, tld, item_index, status, is_available, query_method, response_time_ms, error_message, checked_at FROM scan_items WHERE task_id = ?1"
+            "SELECT id, task_id, run_id, batch_id, worker_id, domain, tld, item_index, status, is_available, query_method, response_time_ms, error_message, checked_at FROM scan_items WHERE task_id = ?1"
         );
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> =
             vec![Box::new(task_id.to_string())];
@@ -150,7 +150,7 @@ impl<'a> ScanItemRepo<'a> {
         limit: i64,
     ) -> Result<Vec<ScanItem>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, task_id, run_id, domain, tld, item_index, status, is_available, query_method, response_time_ms, error_message, checked_at FROM scan_items WHERE task_id = ?1 AND item_index >= ?2 ORDER BY item_index ASC LIMIT ?3"
+            "SELECT id, task_id, run_id, batch_id, worker_id, domain, tld, item_index, status, is_available, query_method, response_time_ms, error_message, checked_at FROM scan_items WHERE task_id = ?1 AND item_index >= ?2 ORDER BY item_index ASC LIMIT ?3"
         )?;
         let items = stmt
             .query_map(rusqlite::params![task_id, from_index, limit], |row| {
@@ -166,16 +166,18 @@ impl<'a> ScanItemRepo<'a> {
             id: row.get(0)?,
             task_id: row.get(1)?,
             run_id: row.get(2)?,
-            domain: row.get(3)?,
-            tld: row.get(4)?,
-            item_index: row.get(5)?,
-            status: serde_json::from_str(&row.get::<_, String>(6)?)
+            batch_id: row.get(3)?,
+            worker_id: row.get(4)?,
+            domain: row.get(5)?,
+            tld: row.get(6)?,
+            item_index: row.get(7)?,
+            status: serde_json::from_str(&row.get::<_, String>(8)?)
                 .unwrap_or(ScanItemStatus::Pending),
-            is_available: row.get(7)?,
-            query_method: row.get(8)?,
-            response_time_ms: row.get(9)?,
-            error_message: row.get(10)?,
-            checked_at: row.get(11)?,
+            is_available: row.get(9)?,
+            query_method: row.get(10)?,
+            response_time_ms: row.get(11)?,
+            error_message: row.get(12)?,
+            checked_at: row.get(13)?,
         })
     }
 }
@@ -238,6 +240,8 @@ mod tests {
             id: 0,
             task_id: "task1".to_string(),
             run_id: "run1".to_string(),
+            batch_id: None,
+            worker_id: None,
             domain: domain.to_string(),
             tld: ".com".to_string(),
             item_index: index,

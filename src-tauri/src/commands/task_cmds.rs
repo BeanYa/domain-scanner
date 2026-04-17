@@ -2,6 +2,7 @@ use crate::db::filter_repo::FilterRepo;
 use crate::db::init;
 use crate::db::log_repo::LogRepo;
 use crate::db::proxy_repo::ProxyRepo;
+use crate::db::scan_batch_repo::ScanBatchRepo;
 use crate::db::scan_item_repo::ScanItemRepo;
 use crate::db::task_repo::TaskRepo;
 use crate::db::task_run_repo::TaskRunRepo;
@@ -237,6 +238,7 @@ pub fn delete_task(
     let filter_repo = FilterRepo::new(&conn);
     let log_repo = LogRepo::new(&conn);
     let scan_item_repo = ScanItemRepo::new(&conn);
+    let scan_batch_repo = ScanBatchRepo::new(&conn);
     let task_run_repo = TaskRunRepo::new(&conn);
     let task_repo = TaskRepo::new(&conn);
 
@@ -247,6 +249,9 @@ pub fn delete_task(
         .delete_by_task(&task_id)
         .map_err(|e| e.to_string())?;
     scan_item_repo
+        .delete_by_task(&task_id)
+        .map_err(|e| e.to_string())?;
+    scan_batch_repo
         .delete_by_task(&task_id)
         .map_err(|e| e.to_string())?;
     task_run_repo

@@ -61,6 +61,8 @@ fn make_item(run_id: &str, item_index: i64) -> ScanItem {
         id: 0,
         task_id: "task-1".to_string(),
         run_id: run_id.to_string(),
+        batch_id: None,
+        worker_id: None,
         domain: format!("domain-{:04}.com", item_index),
         tld: ".com".to_string(),
         item_index,

@@ -90,6 +90,8 @@ pub fn init_database(conn: &Connection) -> Result<(), Box<dyn std::error::Error>
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             task_id TEXT NOT NULL REFERENCES tasks(id),
             run_id TEXT NOT NULL,
+            batch_id TEXT,
+            worker_id TEXT,
             domain TEXT NOT NULL,
             tld TEXT NOT NULL,
             item_index INTEGER NOT NULL,
@@ -103,6 +105,58 @@ pub fn init_database(conn: &Connection) -> Result<(), Box<dyn std::error::Error>
         );
         CREATE INDEX IF NOT EXISTS idx_scan_items_task_status ON scan_items(task_id, run_id, status);
         CREATE INDEX IF NOT EXISTS idx_scan_items_task_checked ON scan_items(task_id, run_id, checked_at DESC, id DESC);
+
+        CREATE TABLE IF NOT EXISTS scan_batches (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL REFERENCES tasks(id),
+            run_id TEXT NOT NULL REFERENCES task_runs(id),
+            batch_index INTEGER NOT NULL,
+            start_index INTEGER NOT NULL,
+            end_index INTEGER NOT NULL,
+            request_count INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            worker_id TEXT,
+            attempt INTEGER DEFAULT 0,
+            completed_count INTEGER DEFAULT 0,
+            available_count INTEGER DEFAULT 0,
+            error_count INTEGER DEFAULT 0,
+            result_cursor INTEGER DEFAULT 0,
+            log_cursor INTEGER DEFAULT 0,
+            lease_expires_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(task_id, run_id, batch_index)
+        );
+        CREATE INDEX IF NOT EXISTS idx_scan_batches_run_status
+            ON scan_batches(task_id, run_id, status);
+        CREATE INDEX IF NOT EXISTS idx_scan_batches_worker_status
+            ON scan_batches(worker_id, status);
+
+        CREATE TABLE IF NOT EXISTS cluster_workers (
+            id TEXT PRIMARY KEY,
+            name TEXT,
+            base_url TEXT,
+            worker_type TEXT NOT NULL DEFAULT 'remote',
+            status TEXT NOT NULL,
+            registration_token_hash TEXT,
+            auth_token_ref TEXT,
+            version TEXT,
+            max_running_batches INTEGER,
+            max_total_concurrency INTEGER,
+            max_batch_concurrency INTEGER,
+            current_running_batches INTEGER DEFAULT 0,
+            current_concurrency INTEGER DEFAULT 0,
+            install_command TEXT,
+            expires_at TEXT,
+            last_heartbeat_at TEXT,
+            last_checked_at TEXT,
+            last_error TEXT,
+            enabled INTEGER DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_cluster_workers_status ON cluster_workers(status, enabled);
+        CREATE INDEX IF NOT EXISTS idx_cluster_workers_type ON cluster_workers(worker_type);
 
         CREATE TABLE IF NOT EXISTS task_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -187,11 +241,20 @@ pub fn init_database(conn: &Connection) -> Result<(), Box<dyn std::error::Error>
     migrate_add_column(conn, "tasks", "concurrency", "INTEGER DEFAULT 50");
     migrate_add_column(conn, "tasks", "proxy_id", "INTEGER");
     migrate_add_column(conn, "scan_items", "run_id", "TEXT");
+    migrate_add_column(conn, "scan_items", "batch_id", "TEXT");
+    migrate_add_column(conn, "scan_items", "worker_id", "TEXT");
     migrate_add_column(conn, "task_logs", "run_id", "TEXT");
     migrate_add_column(conn, "proxies", "status", "TEXT DEFAULT '\"unavailable\"'");
     migrate_add_column(conn, "proxies", "last_checked_at", "TEXT");
     migrate_add_column(conn, "proxies", "last_error", "TEXT");
     migrate_proxy_status_encoding(conn);
+    let _ = conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_scan_items_task_run_index_unique
+         ON scan_items(task_id, run_id, item_index)",
+        [],
+    );
+    let worker_repo = crate::db::cluster_worker_repo::ClusterWorkerRepo::new(conn);
+    worker_repo.upsert_local_worker()?;
 
     Ok(())
 }
@@ -266,6 +329,8 @@ mod tests {
         assert!(tables.contains(&"tasks".to_string()));
         assert!(tables.contains(&"task_batches".to_string()));
         assert!(tables.contains(&"scan_items".to_string()));
+        assert!(tables.contains(&"scan_batches".to_string()));
+        assert!(tables.contains(&"cluster_workers".to_string()));
         assert!(tables.contains(&"task_logs".to_string()));
         assert!(tables.contains(&"task_runs".to_string()));
         assert!(tables.contains(&"proxies".to_string()));
@@ -292,6 +357,9 @@ mod tests {
         assert!(indexes.contains(&"idx_tasks_batch".to_string()));
         assert!(indexes.contains(&"idx_tasks_status".to_string()));
         assert!(indexes.contains(&"idx_scan_items_task_status".to_string()));
+        assert!(indexes.contains(&"idx_scan_batches_run_status".to_string()));
+        assert!(indexes.contains(&"idx_scan_batches_worker_status".to_string()));
+        assert!(indexes.contains(&"idx_cluster_workers_status".to_string()));
         assert!(indexes.contains(&"idx_task_logs_task".to_string()));
         assert!(indexes.contains(&"idx_task_runs_task_started".to_string()));
         assert!(indexes.contains(&"idx_filtered_results_task".to_string()));

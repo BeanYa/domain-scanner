@@ -71,6 +71,14 @@ pub fn run() {
             vector_cmds::revectorize_item,
             gpu_cmds::get_gpu_status,
             gpu_cmds::update_gpu_config,
+            worker_cmds::create_worker_registration,
+            worker_cmds::poll_worker_registration,
+            worker_cmds::list_workers,
+            worker_cmds::test_worker,
+            worker_cmds::enable_worker,
+            worker_cmds::disable_worker,
+            worker_cmds::delete_worker,
+            worker_cmds::list_scan_batches,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

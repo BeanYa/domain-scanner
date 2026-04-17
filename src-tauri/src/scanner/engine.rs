@@ -1,10 +1,13 @@
 use crate::db::proxy_repo::ProxyRepo;
+use crate::db::scan_batch_repo::ScanBatchRepo;
 use crate::db::scan_item_repo::ScanItemRepo;
 use crate::db::task_repo::TaskRepo;
 use crate::db::task_run_repo::TaskRunRepo;
 use crate::models::proxy::ProxyStatus;
+use crate::models::scan_batch::{make_scan_batch_id, ScanBatchStatus, LOCAL_WORKER_ID};
 use crate::models::scan_item::{ScanItem, ScanItemStatus};
 use crate::models::task::TaskStatus;
+use crate::scanner::batch_planner::batch_index_for_item;
 use crate::scanner::domain_checker::{CheckConfig, DomainChecker};
 use crate::scanner::list_generator::{DomainCandidate, ListGenerator};
 use futures::future::BoxFuture;
@@ -21,6 +24,7 @@ pub struct EngineConfig {
     pub batch_write_size: usize,
     pub progress_report_interval_ms: u64,
     pub proxy_error_pause_threshold: usize,
+    pub scan_batch_size: i64,
 }
 
 impl Default for EngineConfig {
@@ -31,6 +35,7 @@ impl Default for EngineConfig {
             batch_write_size: 500,
             progress_report_interval_ms: 200,
             proxy_error_pause_threshold: 10,
+            scan_batch_size: crate::models::scan_batch::DEFAULT_SCAN_BATCH_SIZE,
         }
     }
 }
@@ -162,6 +167,10 @@ impl ScanEngine {
                     error_count,
                     &mut pending_items,
                     app,
+                    Some(match intent {
+                        CancelIntent::Pause => ScanBatchStatus::Paused,
+                        CancelIntent::Stop => ScanBatchStatus::Cancelled,
+                    }),
                 );
                 {
                     let c = conn.lock().map_err(|e| e.to_string())?;
@@ -196,6 +205,11 @@ impl ScanEngine {
                 id: 0,
                 task_id: task_id.to_string(),
                 run_id: run_id.to_string(),
+                batch_id: Some(make_scan_batch_id(
+                    run_id,
+                    batch_index_for_item(candidate.index, self.config.scan_batch_size),
+                )),
+                worker_id: Some(LOCAL_WORKER_ID.to_string()),
                 domain: result.domain,
                 tld: candidate.tld,
                 item_index: candidate.index,
@@ -230,6 +244,7 @@ impl ScanEngine {
                     error_count,
                     &mut pending_items,
                     app,
+                    Some(ScanBatchStatus::Paused),
                 );
                 self.pause_for_proxy_errors_locked(&conn, task_id, run_id, task.proxy_id, &reason)?;
                 cancel_token.cancel();
@@ -259,6 +274,7 @@ impl ScanEngine {
                     error_count,
                     &mut pending_items,
                     app,
+                    None,
                 );
                 last_persist_at = Instant::now();
             }
@@ -300,6 +316,7 @@ impl ScanEngine {
             error_count,
             &mut pending_items,
             app,
+            Some(ScanBatchStatus::Succeeded),
         );
         {
             let c = conn.lock().map_err(|e| e.to_string())?;
@@ -358,6 +375,7 @@ impl ScanEngine {
         error_count: i64,
         pending_items: &mut Vec<ScanItem>,
         app: &AppHandle,
+        terminal_batch_status: Option<ScanBatchStatus>,
     ) {
         if let Ok(c) = conn.lock() {
             let flushed_count = pending_items.len();
@@ -393,6 +411,15 @@ impl ScanEngine {
                 run_repo.update_progress(run_id, completed_count, available_count, error_count)
             {
                 tracing::error!("Failed to update run progress: {}", e);
+            }
+            let batch_repo = ScanBatchRepo::new(&c);
+            if let Err(e) = batch_repo.update_local_progress(
+                task_id,
+                run_id,
+                completed_index,
+                terminal_batch_status,
+            ) {
+                tracing::error!("Failed to update scan batch progress: {}", e);
             }
         }
     }

@@ -17,12 +17,13 @@ import {
   Save,
   Settings,
   Shield,
+  Server,
 } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useTaskStore } from "../store/taskStore";
 import { useProxyStore } from "../store/proxyStore";
 import { invokeCommand, listenEvent } from "../services/tauri";
-import type { LogEntry, PaginatedResult, ScanItem, TaskRun } from "../types";
+import type { ListScanBatchesResponse, LogEntry, PaginatedResult, ScanBatchSummary, ScanItem, TaskRun } from "../types";
 import ActionNotice, { type ActionNoticeState } from "../components/ActionNotice";
 import { ProxySelect } from "../components/ProxySelect";
 
@@ -81,6 +82,9 @@ export default function TaskDetail() {
   const [selectedResultIds, setSelectedResultIds] = useState<number[]>([]);
   const [retryingResults, setRetryingResults] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [batchSummary, setBatchSummary] = useState<ScanBatchSummary | null>(null);
+  const [batchesLoading, setBatchesLoading] = useState(false);
+  const [batchesExpanded, setBatchesExpanded] = useState(false);
   const [logsLoading, setLogsLoading] = useState(false);
   const [logsError, setLogsError] = useState<string | null>(null);
   const [settingsConcurrency, setSettingsConcurrency] = useState(50);
@@ -170,6 +174,30 @@ export default function TaskDetail() {
     }
   }, [id, effectiveRunId, logFilter, logType]);
 
+  const fetchBatchSummary = useCallback(async () => {
+    if (!id || !effectiveRunId) {
+      setBatchSummary(null);
+      return;
+    }
+    setBatchesLoading(true);
+    try {
+      const result = await invokeCommand<string>("list_scan_batches", {
+        request: {
+          task_id: id,
+          run_id: effectiveRunId,
+          limit: 0,
+          offset: 0,
+        },
+      });
+      const payload = JSON.parse(result) as ListScanBatchesResponse;
+      setBatchSummary(payload.summary);
+    } catch {
+      setBatchSummary(null);
+    } finally {
+      setBatchesLoading(false);
+    }
+  }, [id, effectiveRunId]);
+
   useEffect(() => {
     if (tasks.length === 0) fetchTasks();
   }, [tasks.length, fetchTasks]);
@@ -200,6 +228,10 @@ export default function TaskDetail() {
   useEffect(() => {
     fetchLogs();
   }, [fetchLogs]);
+
+  useEffect(() => {
+    fetchBatchSummary();
+  }, [fetchBatchSummary]);
 
   // Listen for scan progress events
   useEffect(() => {
@@ -237,6 +269,7 @@ export default function TaskDetail() {
         fetchRuns();
         fetchResults();
         fetchLogs();
+        fetchBatchSummary();
       }
     });
     return () => {
@@ -247,7 +280,7 @@ export default function TaskDetail() {
         window.clearTimeout(resultRefreshTimerRef.current);
       }
     };
-  }, [id, effectiveRunId, resultPage, fetchTasks, fetchRuns, fetchResults, fetchLogs]);
+  }, [id, effectiveRunId, resultPage, fetchTasks, fetchRuns, fetchResults, fetchLogs, fetchBatchSummary]);
 
   useEffect(() => {
     const unlisten = listenEvent<LogEntry>("task-log-created", (log) => {
@@ -269,6 +302,7 @@ export default function TaskDetail() {
     if (!task || task.status !== "running") return;
     const interval = setInterval(() => {
       fetchRuns();
+      fetchBatchSummary();
       if (resultPage === 1) {
         fetchResults();
       }
@@ -277,7 +311,7 @@ export default function TaskDetail() {
       }
     }, 5000);
     return () => clearInterval(interval);
-  }, [tasks, id, resultPage, showLogs, fetchRuns, fetchResults, fetchLogs]);
+  }, [tasks, id, resultPage, showLogs, fetchRuns, fetchResults, fetchLogs, fetchBatchSummary]);
 
   const task = tasks.find((t) => t.id === id);
   const selectedRun = useMemo(
@@ -324,6 +358,7 @@ export default function TaskDetail() {
       await startTask(task.id);
       await fetchTasks();
       await fetchRuns();
+      await fetchBatchSummary();
     } catch (e) {
       setActionError(String(e));
     } finally {
@@ -361,6 +396,7 @@ export default function TaskDetail() {
       await fetchRuns();
       await fetchResults();
       await fetchLogs();
+      await fetchBatchSummary();
     } catch (e) {
       setActionError(String(e));
     } finally {
@@ -381,6 +417,7 @@ export default function TaskDetail() {
       await fetchRuns();
       await fetchResults();
       await fetchLogs();
+      await fetchBatchSummary();
     } catch (e) {
       setActionError(String(e));
     } finally {
@@ -399,6 +436,7 @@ export default function TaskDetail() {
       const newRunId = await rerunTask(task.id);
       await fetchTasks();
       await fetchRuns();
+      await fetchBatchSummary();
       setSelectedRunId(newRunId);
     } catch (e) {
       setActionError(String(e));
@@ -439,7 +477,7 @@ export default function TaskDetail() {
         },
       });
       setSelectedResultIds([]);
-      await Promise.all([fetchResults(), fetchLogs(), fetchRuns(), fetchTasks()]);
+      await Promise.all([fetchResults(), fetchLogs(), fetchRuns(), fetchTasks(), fetchBatchSummary()]);
     } catch (e) {
       setResultsError(String(e));
     } finally {
@@ -746,6 +784,60 @@ export default function TaskDetail() {
           </div>
         </div>
       </div>
+
+      {batchSummary && batchSummary.total > 0 && (
+        <div className="glass-panel overflow-hidden">
+          <button
+            type="button"
+            className="w-full px-5 py-3.5 border-b border-cyber-border/30 flex items-center justify-between text-left hover:bg-cyber-card/20 transition-colors"
+            onClick={() => setBatchesExpanded((expanded) => !expanded)}
+            aria-expanded={batchesExpanded}
+          >
+            <h2 className="section-title m-0">
+              <Server className="w-4 h-4 text-cyber-blue" />
+              Batch 调度摘要
+            </h2>
+            <div className="flex items-center gap-3 text-xs text-cyber-muted-dim">
+              <span>{batchesLoading ? "刷新中..." : `${batchSummary.total} 个 batch`}</span>
+              <ChevronDown className={`w-4 h-4 transition-transform ${batchesExpanded ? "rotate-180" : ""}`} />
+            </div>
+          </button>
+          <div className="grid grid-cols-4 gap-3 p-4">
+            <div className="metric-tile space-y-1">
+              <p className="text-xs text-cyber-muted">运行中</p>
+              <p className="text-xl font-normal text-cyber-blue tabular-nums">
+                {(batchSummary.running + batchSummary.assigned + batchSummary.retrying).toLocaleString()}
+              </p>
+              <p className="text-[10px] text-cyber-muted-dim">queued {batchSummary.queued}</p>
+            </div>
+            <div className="metric-tile space-y-1">
+              <p className="text-xs text-cyber-muted">已完成 batch</p>
+              <p className="text-xl font-normal text-cyber-green tabular-nums">{batchSummary.succeeded.toLocaleString()}</p>
+              <p className="text-[10px] text-cyber-muted-dim">/ {batchSummary.total.toLocaleString()}</p>
+            </div>
+            <div className="metric-tile space-y-1">
+              <p className="text-xs text-cyber-muted">异常 batch</p>
+              <p className="text-xl font-normal text-cyber-red tabular-nums">
+                {(batchSummary.failed + batchSummary.expired + batchSummary.cancelled).toLocaleString()}
+              </p>
+              <p className="text-[10px] text-cyber-muted-dim">paused {batchSummary.paused}</p>
+            </div>
+            <div className="metric-tile space-y-1">
+              <p className="text-xs text-cyber-muted">参与 worker</p>
+              <p className="text-xl font-normal text-cyber-text tabular-nums">{batchSummary.worker_count}</p>
+              <p className="text-[10px] text-cyber-muted-dim">结果 {batchSummary.completed_count.toLocaleString()}</p>
+            </div>
+          </div>
+          {batchesExpanded && (
+            <div className="border-t border-cyber-border/20 px-5 py-3 text-xs text-cyber-muted-dim grid grid-cols-4 gap-3">
+              <span>可用：{batchSummary.available_count.toLocaleString()}</span>
+              <span>错误：{batchSummary.error_count.toLocaleString()}</span>
+              <span>重试：{batchSummary.retrying.toLocaleString()}</span>
+              <span>过期：{batchSummary.expired.toLocaleString()}</span>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="glass-panel overflow-hidden">
         <div className="px-5 py-3.5 border-b border-cyber-border/30 flex items-center justify-between">

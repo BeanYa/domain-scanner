@@ -62,6 +62,8 @@ export interface ScanItem {
   id: number;
   task_id: string;
   run_id: string;
+  batch_id: string | null;
+  worker_id: string | null;
   domain: string;
   tld: string;
   item_index: number;
@@ -159,6 +161,116 @@ export interface TaskRun {
   error_count: number;
   started_at: string;
   finished_at: string | null;
+}
+
+export type ClusterWorkerStatus =
+  | "pending"
+  | "available"
+  | "unavailable"
+  | "error"
+  | "expired"
+  | "disabled";
+
+export type ClusterWorkerType = "local" | "remote";
+
+export interface WorkerCapabilities {
+  max_running_batches: number;
+  max_total_concurrency: number;
+  max_batch_concurrency: number;
+}
+
+export interface ClusterWorker {
+  id: string;
+  name: string | null;
+  base_url: string | null;
+  worker_type: ClusterWorkerType;
+  status: ClusterWorkerStatus;
+  version: string | null;
+  max_running_batches: number | null;
+  max_total_concurrency: number | null;
+  max_batch_concurrency: number | null;
+  current_running_batches: number;
+  current_concurrency: number;
+  install_command: string | null;
+  expires_at: string | null;
+  last_heartbeat_at: string | null;
+  last_checked_at: string | null;
+  last_error: string | null;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateWorkerRegistrationResponse {
+  worker_id: string;
+  status: ClusterWorkerStatus;
+  install_command: string;
+  expires_at: string;
+}
+
+export interface WorkerHealthCheckResult {
+  worker_id: string;
+  success: boolean;
+  status: ClusterWorkerStatus;
+  message: string;
+  checked_at: string;
+  version: string | null;
+  capabilities: WorkerCapabilities | null;
+}
+
+export type ScanBatchStatus =
+  | "queued"
+  | "assigned"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "retrying"
+  | "paused"
+  | "cancelled"
+  | "expired";
+
+export interface ScanBatch {
+  id: string;
+  task_id: string;
+  run_id: string;
+  batch_index: number;
+  start_index: number;
+  end_index: number;
+  request_count: number;
+  status: ScanBatchStatus;
+  worker_id: string | null;
+  attempt: number;
+  completed_count: number;
+  available_count: number;
+  error_count: number;
+  result_cursor: number;
+  log_cursor: number;
+  lease_expires_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ScanBatchSummary {
+  total: number;
+  queued: number;
+  assigned: number;
+  running: number;
+  succeeded: number;
+  failed: number;
+  retrying: number;
+  paused: number;
+  cancelled: number;
+  expired: number;
+  completed_count: number;
+  available_count: number;
+  error_count: number;
+  worker_count: number;
+}
+
+export interface ListScanBatchesResponse {
+  items: ScanBatch[];
+  summary: ScanBatchSummary;
+  total: number;
 }
 
 export interface VectorProgress {

@@ -7,11 +7,13 @@ use tokio_util::sync::CancellationToken;
 use crate::db::init;
 use crate::db::log_repo::{LogRepo, LogType};
 use crate::db::proxy_repo::ProxyRepo;
+use crate::db::scan_batch_repo::ScanBatchRepo;
 use crate::db::task_repo::TaskRepo;
 use crate::db::task_run_repo::TaskRunRepo;
 use crate::models::proxy::ProxyConfig;
 use crate::models::task::{TaskRun, TaskStatus};
 use crate::proxy::manager::ProxyManager;
+use crate::scanner::batch_planner::{default_scan_batch_size, plan_scan_batches};
 use crate::scanner::domain_checker::{CheckConfig, DomainChecker};
 use crate::scanner::engine::{CancelIntent, EngineConfig, ScanEngine};
 use crate::scanner::list_generator::ListGenerator;
@@ -68,6 +70,14 @@ impl TaskRunner {
             TaskStatus::Pending => self.create_new_run(&run_repo, &task_id, total_count)?,
             _ => unreachable!(),
         };
+        if matches!(task.status, TaskStatus::Pending) {
+            let scan_batch_repo = ScanBatchRepo::new(&conn);
+            let batches =
+                plan_scan_batches(&task_id, &run.id, total_count, default_scan_batch_size());
+            scan_batch_repo
+                .create_many(&batches)
+                .map_err(|e| format!("Failed to create scan batches: {}", e))?;
+        }
 
         task_repo
             .update_status(&task_id, &TaskStatus::Running)

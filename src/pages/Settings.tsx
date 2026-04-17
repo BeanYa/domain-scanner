@@ -10,14 +10,24 @@ import {
   Database,
   ExternalLink,
   Loader2,
+  Server,
+  Copy,
+  RefreshCw,
+  Trash2,
+  Power,
+  PowerOff,
+  KeyRound,
+  Clock,
+  Activity,
 } from "lucide-react";
 import { useGpuStore } from "../store/gpuStore";
 import { useLlmStore } from "../store/llmStore";
+import { useClusterStore } from "../store/clusterStore";
 import { TLD_LIST, TLDS_BY_CATEGORY, TLD_COUNT, type TldCategory } from "../data/tlds";
 import ActionNotice, { type ActionNoticeState } from "../components/ActionNotice";
-import type { LlmConfig } from "../types";
+import type { ClusterWorker, ClusterWorkerStatus, LlmConfig } from "../types";
 
-type SettingsTab = "llm" | "gpu" | "tld" | "general";
+type SettingsTab = "llm" | "gpu" | "cluster" | "tld" | "general";
 type SettingsNotify = (action: string, notice: ActionNoticeState) => void;
 
 const categoryLabels: Record<TldCategory, string> = {
@@ -39,6 +49,7 @@ export default function Settings() {
   const tabs: { key: SettingsTab; label: string; icon: typeof SettingsIcon; color: string }[] = [
     { key: "llm", label: "Embedding", icon: Brain, color: "text-cyber-purple" },
     { key: "gpu", label: "GPU 设置", icon: Cpu, color: "text-cyber-green" },
+    { key: "cluster", label: "集群节点", icon: Server, color: "text-cyber-blue" },
     { key: "tld", label: "TLD 管理", icon: Globe, color: "text-cyber-orange" },
     { key: "general", label: "通用设置", icon: SettingsIcon, color: "text-cyber-blue" },
   ];
@@ -76,6 +87,7 @@ export default function Settings() {
         <div>
           {activeTab === "llm" && <LLMSettings notify={notify} />}
           {activeTab === "gpu" && <GPUSettings notify={notify} />}
+          {activeTab === "cluster" && <ClusterSettings notify={notify} />}
           {activeTab === "tld" && <TLDSettings notify={notify} />}
           {activeTab === "general" && <GeneralSettings notify={notify} />}
         </div>
@@ -415,6 +427,330 @@ function GPUSettings({ notify }: { notify: SettingsNotify }) {
   );
 }
 
+const workerStatusLabels: Record<ClusterWorkerStatus, { label: string; className: string }> = {
+  pending: { label: "等待注册", className: "badge-blue" },
+  available: { label: "在线", className: "badge-green" },
+  unavailable: { label: "离线", className: "badge-neutral" },
+  error: { label: "错误", className: "badge-red" },
+  expired: { label: "已过期", className: "badge-red" },
+  disabled: { label: "已禁用", className: "badge-neutral" },
+};
+
+function ClusterSettings({ notify }: { notify: SettingsNotify }) {
+  const {
+    workers,
+    loading,
+    registering,
+    testingWorkerId,
+    error,
+    lastRegistration,
+    fetchWorkers,
+    createWorkerRegistration,
+    pollWorkerRegistration,
+    testWorker,
+    enableWorker,
+    disableWorker,
+    deleteWorker,
+  } = useClusterStore();
+  const [form, setForm] = useState({
+    name: "",
+    base_url: "http://127.0.0.1:8731",
+    script_url: "https://example.com/domain-scanner/worker_install.sh",
+    port: 8731,
+    timeout_seconds: 600,
+  });
+
+  useEffect(() => {
+    fetchWorkers();
+  }, [fetchWorkers]);
+
+  const remoteWorkers = workers.filter((worker) => worker.worker_type === "remote");
+  const availableCount = workers.filter((worker) => worker.status === "available").length;
+
+  const handleCreateRegistration = async () => {
+    const registration = await createWorkerRegistration({
+      name: form.name.trim() || undefined,
+      base_url: form.base_url.trim(),
+      script_url: form.script_url.trim(),
+      port: form.port,
+      timeout_seconds: form.timeout_seconds,
+    });
+    if (!registration) {
+      notify("cluster-register-error", {
+        tone: "error",
+        title: "创建 worker 注册失败",
+        message: useClusterStore.getState().error ?? "后端没有返回注册信息。",
+      });
+      return;
+    }
+    notify("cluster-register", {
+      tone: "success",
+      title: "安装命令已生成",
+      message: "该命令包含一次性 token，请只在受信任的服务器终端中使用。",
+    });
+  };
+
+  const handleCopyCommand = async (command: string) => {
+    try {
+      await navigator.clipboard.writeText(command);
+      notify("cluster-copy-command", {
+        tone: "success",
+        title: "安装命令已复制",
+        message: "命令包含敏感 token，避免粘贴到日志、聊天或公开文档中。",
+      });
+    } catch (e) {
+      notify("cluster-copy-command-error", {
+        tone: "error",
+        title: "复制失败",
+        message: String(e),
+      });
+    }
+  };
+
+  const handleProbe = async (worker: ClusterWorker) => {
+    const result =
+      worker.status === "pending"
+        ? await pollWorkerRegistration(worker.id)
+        : await testWorker(worker.id);
+    notify("cluster-probe", {
+      tone: result?.success ? "success" : "warning",
+      title: result?.success ? "worker 探测通过" : "worker 探测未通过",
+      message: result?.message ?? useClusterStore.getState().error ?? "没有返回探测结果。",
+    });
+  };
+
+  const handleToggleWorker = async (worker: ClusterWorker) => {
+    if (worker.enabled && worker.status !== "disabled") {
+      await disableWorker(worker.id);
+      notify("cluster-disable", {
+        tone: "info",
+        title: "worker 已禁用",
+        message: `${worker.name ?? worker.id} 不会参与后续 batch 调度。`,
+      });
+    } else {
+      await enableWorker(worker.id);
+      notify("cluster-enable", {
+        tone: "info",
+        title: "worker 已启用",
+        message: `${worker.name ?? worker.id} 已恢复为可探测状态。`,
+      });
+    }
+  };
+
+  const handleDeleteWorker = async (worker: ClusterWorker) => {
+    const confirmed = window.confirm(`确定删除 worker“${worker.name ?? worker.id}”吗？`);
+    if (!confirmed) return;
+    await deleteWorker(worker.id);
+    const storeError = useClusterStore.getState().error;
+    notify("cluster-delete", {
+      tone: storeError ? "error" : "info",
+      title: storeError ? "删除 worker 失败" : "worker 已删除",
+      message: storeError ?? "该远端 worker 记录已从本地移除。",
+    });
+  };
+
+  return (
+    <div className="space-y-5 animate-fade-in">
+      <div className="flex items-center justify-between">
+        <h2 className="section-title m-0">
+          <Server className="w-4.5 h-4.5 text-cyber-blue" /> 集群节点
+        </h2>
+        <button className="cyber-btn-secondary cyber-btn-sm" onClick={fetchWorkers} disabled={loading}>
+          <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
+          刷新
+        </button>
+      </div>
+
+      <div className="grid grid-cols-3 gap-3">
+        <div className="metric-tile space-y-1">
+          <p className="text-xs text-cyber-muted">节点总数</p>
+          <p className="text-xl font-normal text-cyber-text tabular-nums">{workers.length}</p>
+          <p className="text-[10px] text-cyber-muted-dim">{remoteWorkers.length} 个远端</p>
+        </div>
+        <div className="metric-tile space-y-1">
+          <p className="text-xs text-cyber-muted">在线节点</p>
+          <p className="text-xl font-normal text-cyber-green tabular-nums">{availableCount}</p>
+          <p className="text-[10px] text-cyber-muted-dim">包含本地 worker</p>
+        </div>
+        <div className="metric-tile space-y-1">
+          <p className="text-xs text-cyber-muted">待注册</p>
+          <p className="text-xl font-normal text-cyber-orange tabular-nums">
+            {workers.filter((worker) => worker.status === "pending").length}
+          </p>
+          <p className="text-[10px] text-cyber-muted-dim">可轮询 /health</p>
+        </div>
+      </div>
+
+      <div className="glass-panel p-5 space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="text-sm font-semibold text-cyber-text flex items-center gap-2">
+            <KeyRound className="w-4 h-4 text-cyber-green" />
+            添加远端 worker
+          </h3>
+          <button className="cyber-btn-primary cyber-btn-sm" onClick={handleCreateRegistration} disabled={registering}>
+            {registering ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Server className="w-3.5 h-3.5" />}
+            生成安装命令
+          </button>
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <label className="space-y-1.5">
+            <span className="block text-xs font-medium text-cyber-muted uppercase tracking-wider">节点名称</span>
+            <input
+              className="cyber-input w-full text-sm"
+              placeholder="worker-01"
+              value={form.name}
+              onChange={(event) => setForm({ ...form, name: event.target.value })}
+            />
+          </label>
+          <label className="space-y-1.5">
+            <span className="block text-xs font-medium text-cyber-muted uppercase tracking-wider">Worker URL</span>
+            <input
+              className="cyber-input w-full text-sm font-mono"
+              value={form.base_url}
+              onChange={(event) => setForm({ ...form, base_url: event.target.value })}
+            />
+          </label>
+          <label className="space-y-1.5">
+            <span className="block text-xs font-medium text-cyber-muted uppercase tracking-wider">安装脚本 URL</span>
+            <input
+              className="cyber-input w-full text-sm font-mono"
+              value={form.script_url}
+              onChange={(event) => setForm({ ...form, script_url: event.target.value })}
+            />
+          </label>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="space-y-1.5">
+              <span className="block text-xs font-medium text-cyber-muted uppercase tracking-wider">端口</span>
+              <input
+                className="cyber-input w-full text-sm"
+                type="number"
+                min={1}
+                value={form.port}
+                onChange={(event) => setForm({ ...form, port: Number(event.target.value) || 8731 })}
+              />
+            </label>
+            <label className="space-y-1.5">
+              <span className="block text-xs font-medium text-cyber-muted uppercase tracking-wider">有效期秒</span>
+              <input
+                className="cyber-input w-full text-sm"
+                type="number"
+                min={30}
+                value={form.timeout_seconds}
+                onChange={(event) => setForm({ ...form, timeout_seconds: Number(event.target.value) || 600 })}
+              />
+            </label>
+          </div>
+        </div>
+
+        {lastRegistration && (
+          <div className="rounded-md border border-cyber-orange/25 bg-cyber-orange/[0.04] p-3 space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-xs font-semibold text-cyber-orange">敏感安装命令</div>
+                <div className="mt-1 text-[11px] text-cyber-muted-dim">
+                  过期时间：{formatDateTime(lastRegistration.expires_at)}
+                </div>
+              </div>
+              <button
+                className="cyber-btn-secondary cyber-btn-sm shrink-0"
+                onClick={() => handleCopyCommand(lastRegistration.install_command)}
+              >
+                <Copy className="w-3.5 h-3.5" />
+                复制
+              </button>
+            </div>
+            <code className="block rounded bg-cyber-bg-elevated/70 border border-cyber-border/30 p-3 text-xs text-cyber-text-secondary break-all">
+              {lastRegistration.install_command}
+            </code>
+          </div>
+        )}
+
+        {error && <div className="text-sm text-cyber-red">{error}</div>}
+      </div>
+
+      <div className="space-y-3">
+        {workers.map((worker) => {
+          const status = workerStatusLabels[worker.status] ?? workerStatusLabels.unavailable;
+          const isBusy = testingWorkerId === worker.id;
+          const capabilities = formatCapabilities(worker);
+          return (
+            <div key={worker.id} className="glass-panel p-4 space-y-3">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <Server className={`w-4 h-4 ${worker.worker_type === "local" ? "text-cyber-green" : "text-cyber-blue"}`} />
+                    <h3 className="text-sm font-semibold text-cyber-text truncate">
+                      {worker.name ?? (worker.worker_type === "local" ? "本地内置 Worker" : worker.id)}
+                    </h3>
+                    <span className={`${status.className} text-[10px]`}>{status.label}</span>
+                  </div>
+                  <div className="mt-1 text-xs text-cyber-muted-dim font-mono break-all">
+                    {worker.base_url ?? worker.id}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button className="cyber-btn-secondary cyber-btn-sm" onClick={() => handleProbe(worker)} disabled={isBusy}>
+                    {isBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Activity className="w-3.5 h-3.5" />}
+                    探测
+                  </button>
+                  <button className="cyber-btn-secondary cyber-btn-sm" onClick={() => handleToggleWorker(worker)}>
+                    {worker.enabled && worker.status !== "disabled" ? <PowerOff className="w-3.5 h-3.5" /> : <Power className="w-3.5 h-3.5" />}
+                    {worker.enabled && worker.status !== "disabled" ? "禁用" : "启用"}
+                  </button>
+                  {worker.worker_type === "remote" && (
+                    <button
+                      className="cyber-btn-secondary cyber-btn-sm text-cyber-red border-cyber-red/25 hover:border-cyber-red/45 hover:text-cyber-red"
+                      onClick={() => handleDeleteWorker(worker)}
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      删除
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-3 text-xs">
+                <div className="rounded-md border border-cyber-border/25 bg-cyber-surface/50 p-3">
+                  <div className="text-cyber-muted-dim">能力</div>
+                  <div className="mt-1 font-mono text-cyber-text-secondary">{capabilities}</div>
+                </div>
+                <div className="rounded-md border border-cyber-border/25 bg-cyber-surface/50 p-3">
+                  <div className="text-cyber-muted-dim">版本</div>
+                  <div className="mt-1 font-mono text-cyber-text-secondary">{worker.version ?? "-"}</div>
+                </div>
+                <div className="rounded-md border border-cyber-border/25 bg-cyber-surface/50 p-3">
+                  <div className="text-cyber-muted-dim flex items-center gap-1">
+                    <Clock className="w-3 h-3" />
+                    最近检查
+                  </div>
+                  <div className="mt-1 text-cyber-text-secondary">
+                    {worker.last_checked_at ? formatDateTime(worker.last_checked_at) : "-"}
+                  </div>
+                </div>
+              </div>
+              {worker.last_error && (
+                <div className="text-xs text-cyber-red break-all">{worker.last_error}</div>
+              )}
+            </div>
+          );
+        })}
+
+        {!loading && workers.length === 0 && (
+          <div className="glass-panel p-8 text-center text-sm text-cyber-muted">
+            还没有集群节点。
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function formatCapabilities(worker: ClusterWorker) {
+  const running = worker.max_running_batches ?? "-";
+  const total = worker.max_total_concurrency ?? "-";
+  const batch = worker.max_batch_concurrency ?? "-";
+  return `${running} batches / ${total} total / ${batch} per batch`;
+}
+
 function TLDSettings({ notify }: { notify: SettingsNotify }) {
   return (
     <div className="space-y-5 animate-fade-in">
@@ -528,4 +864,10 @@ function GeneralSettings({ notify }: { notify: SettingsNotify }) {
       </div>
     </div>
   );
+}
+
+function formatDateTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
 }
