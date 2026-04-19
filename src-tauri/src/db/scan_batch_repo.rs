@@ -173,6 +173,57 @@ impl<'a> ScanBatchRepo<'a> {
         Ok(())
     }
 
+    pub fn assign_worker(
+        &self,
+        batch_id: &str,
+        worker_id: &str,
+        status: &ScanBatchStatus,
+    ) -> Result<(), rusqlite::Error> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE scan_batches
+             SET worker_id = ?1, status = ?2, updated_at = ?3
+             WHERE id = ?4",
+            rusqlite::params![worker_id, status.as_str(), now, batch_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_remote_progress(
+        &self,
+        batch_id: &str,
+        status: &ScanBatchStatus,
+        completed_count: i64,
+        available_count: i64,
+        error_count: i64,
+        result_cursor: i64,
+        log_cursor: i64,
+    ) -> Result<(), rusqlite::Error> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE scan_batches
+             SET status = ?1,
+                 completed_count = ?2,
+                 available_count = ?3,
+                 error_count = ?4,
+                 result_cursor = ?5,
+                 log_cursor = ?6,
+                 updated_at = ?7
+             WHERE id = ?8",
+            rusqlite::params![
+                status.as_str(),
+                completed_count,
+                available_count,
+                error_count,
+                result_cursor,
+                log_cursor,
+                now,
+                batch_id,
+            ],
+        )?;
+        Ok(())
+    }
+
     pub fn active_count_for_worker(&self, worker_id: &str) -> Result<i64, rusqlite::Error> {
         self.conn.query_row(
             "SELECT COUNT(*) FROM scan_batches

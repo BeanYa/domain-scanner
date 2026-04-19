@@ -32,6 +32,7 @@
 - [语言和技术栈](LANGUAGE_AND_STACK.md)
 - [约束规范](CONSTRAINTS.md)
 - [测试计划](TEST_PLAN.md)
+- [故障排查](TROUBLESHOOTING.md)
 
 ## 关联项目
 

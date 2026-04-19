@@ -98,6 +98,54 @@ impl ScanEngine {
         cancel_intent: Arc<Mutex<CancelIntent>>,
         app: &AppHandle,
     ) -> Result<ScanProgress, String> {
+        self.run_scan_scope(
+            task_id,
+            run_id,
+            None,
+            true,
+            conn,
+            cancel_token,
+            cancel_intent,
+            app,
+        )
+        .await
+    }
+
+    pub async fn run_scan_range(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        start_index: i64,
+        end_index: i64,
+        conn: Arc<Mutex<rusqlite::Connection>>,
+        cancel_token: tokio_util::sync::CancellationToken,
+        cancel_intent: Arc<Mutex<CancelIntent>>,
+        app: &AppHandle,
+    ) -> Result<ScanProgress, String> {
+        self.run_scan_scope(
+            task_id,
+            run_id,
+            Some((start_index, end_index)),
+            false,
+            conn,
+            cancel_token,
+            cancel_intent,
+            app,
+        )
+        .await
+    }
+
+    async fn run_scan_scope(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        scan_range: Option<(i64, i64)>,
+        complete_task_on_finish: bool,
+        conn: Arc<Mutex<rusqlite::Connection>>,
+        cancel_token: tokio_util::sync::CancellationToken,
+        cancel_intent: Arc<Mutex<CancelIntent>>,
+        app: &AppHandle,
+    ) -> Result<ScanProgress, String> {
         // Get task info
         let task = {
             let c = conn.lock().map_err(|e| e.to_string())?;
@@ -115,10 +163,15 @@ impl ScanEngine {
                 .map_err(|e| format!("Failed to update status: {}", e))?;
         }
 
+        let full_total_count =
+            ListGenerator::new(task.scan_mode.clone(), task.tlds.clone()).total_count();
+        let total_count = task.total_count.max(full_total_count);
+        let (range_start, range_end) = scan_range.unwrap_or((task.completed_index, total_count));
+        let range_end = range_end.max(0).min(full_total_count);
+        let range_start = task.completed_index.max(range_start.max(0)).min(range_end);
         let mut generator = ListGenerator::new(task.scan_mode.clone(), task.tlds.clone())
             .with_batch_size(1)
-            .with_start_index(task.completed_index);
-        let total_count = task.total_count.max(generator.total_count());
+            .with_range(range_start, range_end);
 
         let mut completed_count = task.completed_count;
         let mut available_count = task.available_count;
@@ -305,7 +358,7 @@ impl ScanEngine {
             self.fill_inflight(&mut inflight, &mut generator);
         }
 
-        // Mark task as completed
+        // Mark the current scan range as completed.
         self.persist_progress_locked(
             &conn,
             task_id,
@@ -318,7 +371,7 @@ impl ScanEngine {
             app,
             Some(ScanBatchStatus::Succeeded),
         );
-        {
+        if complete_task_on_finish {
             let c = conn.lock().map_err(|e| e.to_string())?;
             let repo = TaskRepo::new(&c);
             repo.update_status(task_id, &TaskStatus::Completed)

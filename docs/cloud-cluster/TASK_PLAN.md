@@ -23,13 +23,13 @@
 
 ## Phase 2: 本地任务 batch 化
 
-- [ ] `ListGenerator` 支持 `[start_index, end_index)` 范围生成。
-- [ ] 新增 `BatchPlan`、`BatchStatus`、`BatchResult`、`BatchLog` 类型。
-- [ ] 新增 `scan_batches` repo。
-- [ ] 抽出 `BatchExecutor`。
-- [ ] 实现 `LocalEmbeddedWorker`。
-- [ ] 实现 `BatchCoordinator`。
-- [ ] `TaskRunner.start` 改为启动 coordinator。
+- [x] `ListGenerator` 支持 `[start_index, end_index)` 范围生成。
+- [x] 新增 `BatchPlan`、`BatchStatus`、`BatchResult`、`BatchLog` 类型。
+- [x] 新增 `scan_batches` repo。
+- [x] 抽出 `BatchExecutor`。
+- [x] 实现 `LocalEmbeddedWorker`。
+- [x] 实现 `BatchCoordinator`。
+- [x] `TaskRunner.start` 改为启动 coordinator。
 
 验收：
 
@@ -39,13 +39,13 @@
 
 ## Phase 3: Worker 注册客户端
 
-- [ ] 新增 `cluster_workers` 表和 repo。
-- [ ] 实现 token 生成和 hash 存储。
-- [ ] 实现安装命令生成。
-- [ ] 实现 `create_worker_registration`。
-- [ ] 实现 `poll_worker_registration`。
-- [ ] 实现 `test_worker/list_workers/delete_worker`。
-- [ ] 在 Settings 中新增集群节点管理 UI。
+- [x] 新增 `cluster_workers` 表和 repo。
+- [x] 实现 token 生成和 hash 存储。
+- [x] 实现安装命令生成。
+- [x] 实现 `create_worker_registration`。
+- [x] 实现 `poll_worker_registration`。
+- [x] 实现 `test_worker/list_workers/delete_worker`。
+- [x] 在 Settings 中新增集群节点管理 UI。
 
 验收：
 
@@ -55,11 +55,11 @@
 
 ## Phase 4: RemoteHttpWorker
 
-- [ ] 实现远端 worker HTTP client。
-- [ ] 支持 `/health`、`/capabilities`。
-- [ ] 支持 batch submit/status/results/logs。
-- [ ] 支持 pause/cancel。
-- [ ] 远端错误分类和重试策略。
+- [x] 实现远端 worker HTTP client。
+- [x] 支持 `/health`、`/capabilities`。
+- [x] 支持 batch submit/status/results/logs。
+- [x] 支持 pause/cancel。
+- [x] 远端错误分类和重试策略。
 
 验收：
 
@@ -68,11 +68,11 @@
 
 ## Phase 5: 多 worker 调度
 
-- [ ] coordinator 支持多个 worker。
-- [ ] 按 worker capabilities 分配 batch。
-- [ ] 支持单 worker 多 batch。
-- [ ] 支持 worker 掉线后 batch expired/retry。
-- [ ] 支持本地 worker fallback 策略。
+- [x] coordinator 支持多个 worker。
+- [x] 按 worker capabilities 分配 batch。
+- [x] 支持单 worker 多 batch。
+- [x] 支持 worker 掉线后 batch expired/retry。
+- [x] 支持本地 worker fallback 策略。
 
 验收：
 
@@ -82,11 +82,11 @@
 
 ## Phase 6: UI 和稳定性
 
-- [ ] 任务详情页增加折叠 batch/worker 摘要。
-- [ ] 增加批量调度日志。
-- [ ] 增加状态通知。
-- [ ] 增加压测工具或 mock worker。
-- [ ] 增加文档化的故障排查。
+- [x] 任务详情页增加折叠 batch/worker 摘要。
+- [x] 增加批量调度日志。
+- [x] 增加状态通知。
+- [x] 增加压测工具或 mock worker。
+- [x] 增加文档化的故障排查。
 
 验收：
 

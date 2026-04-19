@@ -14,8 +14,11 @@ use crate::models::proxy::ProxyConfig;
 use crate::models::task::{TaskRun, TaskStatus};
 use crate::proxy::manager::ProxyManager;
 use crate::scanner::batch_planner::{default_scan_batch_size, plan_scan_batches};
+use crate::scanner::batch_coordinator::BatchCoordinator;
+use crate::scanner::batch_executor::BatchExecutor;
 use crate::scanner::domain_checker::{CheckConfig, DomainChecker};
 use crate::scanner::engine::{CancelIntent, EngineConfig, ScanEngine};
+use crate::scanner::local_worker::LocalEmbeddedWorker;
 use crate::scanner::list_generator::ListGenerator;
 use uuid::Uuid;
 
@@ -259,8 +262,19 @@ impl TaskRunner {
                 ),
             );
             let engine = ScanEngine::from_parts(engine_config_for_spawn, checker);
-            let result = engine
-                .run_scan(&tid, &run_id, conn, scan_token, scan_intent, &app)
+            let executor = BatchExecutor::new(engine);
+            let local_worker = LocalEmbeddedWorker::new(executor);
+            let coordinator = BatchCoordinator::new(local_worker);
+            let result = coordinator
+                .run_local_task(
+                    &tid,
+                    &run_id,
+                    task_concurrency,
+                    conn,
+                    scan_token,
+                    scan_intent,
+                    &app,
+                )
                 .await;
 
             // Clean up

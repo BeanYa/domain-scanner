@@ -1,7 +1,12 @@
+pub mod batch;
+pub mod batch_coordinator;
+pub mod batch_executor;
 pub mod batch_planner;
 pub mod domain_checker;
 pub mod engine;
 pub mod list_generator;
+pub mod local_worker;
+pub mod remote_worker;
 pub mod signature;
 pub mod task_runner;
 pub mod tld_manager;

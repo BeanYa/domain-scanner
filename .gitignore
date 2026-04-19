@@ -35,4 +35,5 @@ coverage/
 # Temp
 *.tmp
 *.temp
+target-codex*/
 git.cmd
